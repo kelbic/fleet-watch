@@ -43,11 +43,28 @@ sys.path.insert(0, "/home/claude-agent/midnight-liquidator")
 from analysis.keccak import keccak256  # noqa: E402  (pure-stdlib, без зависимостей)
 
 MIDNIGHT = "0xAdedD8ab6dE832766Fedf0FaC4992E5C4D3EA18A"
-MARKET = "0x168e31250e0008b50d2255a5ab85e0265acd6c12e4f9a1336134b36a65a47937"
-BORROWER = "0xd418224ae3c510b645112fd9275ccfd50f996ee4"
-MATURITY = 1785510000                       # 2026-07-31 15:00:00 UTC
+# ЦЕЛИ ПОД НАБЛЮДЕНИЕМ. Было — одна захардкоженная цель окна 31.07; окно прошло, и вотчер
+# с 15:00Z следил за нулём. 31.07 книга 27.08 разрезана бакетами: 86% её объёма — ДВЕ
+# позиции, и это не книга, а две ставки «орёл-решка». Обе под наблюдение: когда опцион
+# испарится (как $100,214 у 0xd418224ae3), мы узнаем в момент гашения, а не на предбоевом
+# скане, и не потратим планирование на несуществующую цель.
+TARGETS = [
+    {"name": "кит-1 27.08 ~$346k",
+     "market": "0xf27319855df886a604dda3d5675007f0aa6eee504c99f1d789c86b21075f7c20",
+     "borrower": "0xfb94d3404c1d3d9d6f08f79e58041d5ea95accfa",
+     "maturity": 1787788800, "loan_dec": 6, "coll_dec": 18, "coll": "WETH"},
+    {"name": "кит-2 27.08 ~$187k",
+     "market": "0x44495af1cca7842191a65a73978e01ed72238731e193c3b11460083efd60a318",
+     "borrower": "0xd75ffb585ff88d3aa50b7cf9230b27a7eb923c20",
+     "maturity": 1787788800, "loan_dec": 6, "coll_dec": 8, "coll": "cbBTC"},
+]
+# Совместимость с остальным файлом (секции конкурента и чужих ликвидаций): «главная» цель.
+MARKET = TARGETS[0]["market"]
+BORROWER = TARGETS[0]["borrower"]
+MATURITY = TARGETS[0]["maturity"]           # 2026-08-27 00:00:00 UTC
 SEL_DEBT = "0x93af51c2"                     # debt(bytes32,address)
 SEL_COLL = "0xecdcc72d"                     # collateral(bytes32,address,uint256)
+SEL_COLL_BITMAP = "0xb502e1f9"              # collateralBitmap(bytes32,address)
 SEL_BALANCE_OF = "0x70a08231"               # balanceOf(address)
 USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 LOAN_DEC, COLL_DEC = 6, 8                   # USDC / cbBTC
@@ -280,16 +297,63 @@ def foreign_liquidations(from_block: int, to_block: int) -> list[dict]:
     return out
 
 
+def watch_targets(prev: dict) -> dict:
+    """Долг/залог по КАЖДОЙ цели. Алерт одноразовый на цель (защёлка `gone_<i>`), как у
+    прежней одиночной ветки: 30.07 состояние-вместо-перехода давало 20 сообщений в час."""
+    st = {}
+    for i, t in enumerate(TARGETS):
+        try:
+            d = call(MIDNIGHT, SEL_DEBT + _w(t["market"]) + _w(t["borrower"]))
+            # ЗАЛОГ — ПОСЛОТНО И БЕЗ ОБЩЕЙ ЕДИНИЦЫ. У кита-2 на рынке два коллатерала
+            # с РАЗНЫМИ десятичными (cbBTC 8 и обёртка 18): слот 0 дал бы «0.000000»
+            # при живом долге $186,907, а сумма слотов — «1912598661918925 cbBTC».
+            # Оба варианта — молчаливая дезинформация, поэтому держим сырые значения
+            # по слотам: они нужны только для ДЕТЕКТА ИЗМЕНЕНИЯ, не для показа в $.
+            bm = call(MIDNIGHT, SEL_COLL_BITMAP + _w(t["market"]) + _w(t["borrower"]))
+            slots = {k: call(MIDNIGHT, SEL_COLL + _w(t["market"]) + _w(t["borrower"])
+                             + _w(hex(k))) for k in range(16) if bm >> k & 1}
+        except Exception as e:  # noqa: BLE001 — одна цель не валит радар
+            log(f"{t['name']}: чтение не удалось ({e})")
+            continue
+        d_usd = d / 10 ** t["loan_dec"]
+        c_fp = ",".join(f"{k}:{v}" for k, v in sorted(slots.items())) or "нет"
+        left = (t["maturity"] - int(time.time())) / 3600
+        log(f"{t['name']}: долг ${d_usd:,.2f} залог(слоты, сырые) {c_fp} "
+            f"до окна {left:.1f}ч")
+        gone_key, dbt_key, col_key = f"gone_{i}", f"last_debt_{i}", f"coll_{i}"
+        p_d = prev.get(dbt_key)
+        p_c = prev.get(col_key)
+        st[gone_key] = d == 0
+        st[dbt_key] = d_usd if d_usd > 0 else prev.get(dbt_key, 0.0)
+        st[col_key] = c_fp
+        if d == 0:
+            if not prev.get(gone_key, False):
+                was = prev.get(dbt_key, 0.0)
+                tg(f"🚨 [midnight] ОПЦИОН ИСПАРИЛСЯ: {t['name']} погашен сам — долг "
+                   f"${was:,.0f} → $0 за {left:.1f}ч до maturity. Планирование на эту "
+                   f"цель снять. (Прецедент 30.07: $100,214 ушли за 24ч55м до срока.)")
+                log(f"АЛЕРТ: {t['name']} долг обнулился (было ${was:,.0f})")
+            else:
+                log(f"{t['name']}: долг ноль — уже сообщал, TG молчит")
+        elif p_d is not None and abs(p_d - d_usd) >= REPAY_ALERT_USD:
+            # Движение долга крупной цели = смена размера опциона. Порог общий
+            # ($5k): ниже него это шум аккруала, а не решение заёмщика.
+            tg(f"{'⚠️' if p_d > d_usd else '📈'} [midnight] {t['name']}: долг "
+               f"${p_d:,.0f} → ${d_usd:,.0f} ({d_usd - p_d:+,.0f}), до окна {left:.1f}ч.")
+            log(f"АЛЕРТ: {t['name']} долг {p_d:,.0f} → {d_usd:,.0f}")
+        if p_c is not None and c_fp != p_c:
+            tg(f"🔧 [midnight] {t['name']}: залог сдвинулся (слоты {p_c} → {c_fp}), "
+               f"до окна {left:.1f}ч.")
+            log(f"АЛЕРТ: {t['name']} залог {p_c} → {c_fp}")
+    return st
+
+
 def main() -> int:
-    debt = call(MIDNIGHT, SEL_DEBT + _w(MARKET) + _w(BORROWER))
-    coll = call(MIDNIGHT, SEL_COLL + _w(MARKET) + _w(BORROWER) + _w("0x0"))
     comp_usdc = call(USDC, SEL_BALANCE_OF + _w(COMPETITOR))
     comp_eth = int(rpc("eth_getBalance", [COMPETITOR, "latest"]), 16)
     comp_nonce = int(rpc("eth_getTransactionCount", [COMPETITOR, "latest"]), 16)
     head = int(rpc("eth_blockNumber", []), 16)
 
-    d_usd = debt / 10 ** LOAN_DEC
-    c_btc = coll / 10 ** COLL_DEC
     cu = comp_usdc / 10 ** LOAN_DEC
     now = int(time.time())
     dt = MATURITY - now
@@ -303,54 +367,30 @@ def main() -> int:
     # Защёлка «цель исчезла»: ветка debt==0 проверяет СОСТОЯНИЕ, а не переход, поэтому без
     # неё алерт повторяется каждый запуск — при кроне */3 в дни окна это 20 сообщений в час
     # (поймано в бою 30.07). Защёлка равна текущему состоянию: вернётся долг — снимется сама.
-    was_gone = bool(prev.get("gone_alerted"))
+    # цели окна 27.08 — после загрузки prev (защёлки на цель живут в том же стейте)
+    tgt_state = watch_targets(prev)
     # последний НЕнулевой долг: иначе в одноразовом алерте печатается «Было $0» (p_d уже ноль
     # из прошлого запуска) — сообщение теряет ровно ту цифру, ради которой оно шлётся
-    last_nonzero = (d_usd if d_usd > 0 else
-                    prev.get("last_nonzero_debt_usd") or prev.get("debt_usd") or 0.0)
-    cur = {"debt_usd": d_usd, "coll_btc": c_btc, "comp_usd": cu,
-           "comp_eth": comp_eth, "comp_nonce": comp_nonce, "head": head, "ts": now,
-           "gone_alerted": debt == 0, "last_nonzero_debt_usd": last_nonzero}
+    cur = {**tgt_state,
+           "comp_usd": cu, "comp_eth": comp_eth, "comp_nonce": comp_nonce,
+           "head": head, "ts": now}
     os.makedirs(os.path.dirname(STATE), exist_ok=True)
     json.dump(cur, open(STATE, "w"), indent=1)
 
-    log(f"долг ${d_usd:,.2f} залог {c_btc:.6f} cbBTC | конкурент USDC ${cu:,.2f} "
-        f"ETH {comp_eth/1e18:.6f} nonce {comp_nonce} | до окна {dt/3600:.1f}ч")
+    log(f"конкурент USDC ${cu:,.2f} ETH {comp_eth/1e18:.6f} nonce {comp_nonce}")
     if not prev:
         log("базовая линия записана — TG молчит")
         return 0
 
     when = f"до окна {dt/3600:.1f}ч" if dt > 0 else f"ПОСЛЕ окна +{-dt/60:.0f}мин"
-    p_d = prev.get("debt_usd", d_usd)
-    p_c = prev.get("coll_btc", c_btc)
     p_u = prev.get("comp_usd", cu)
     p_e = prev.get("comp_eth", comp_eth)
     p_n = prev.get("comp_nonce", comp_nonce)
 
-    # --- 1. цель ---------------------------------------------------------------------
-    if debt == 0:
-        if was_gone:
-            log("долг ноль — уже сообщал, TG молчит")
-        else:
-            tg(f"🚨 [midnight] ЦЕЛЬ 31.07 ИСЧЕЗЛА: долг {BORROWER[:10]}… = 0 ({when}). "
-               f"Было ${last_nonzero:,.0f}. Погашено или забрали — проверить логи бота.")
-            log("АЛЕРТ: долг обнулился (одноразово)")
-    elif p_d - d_usd >= REPAY_ALERT_USD:
-        ok, t = floor_reachable(d_usd)
-        verdict = (f"пол ${FLOOR_USD:,.0f} ещё достижим на +{t/60:.0f}мин"
-                   if ok else
-                   f"‼️ пол ${FLOOR_USD:,.0f} БОЛЬШЕ НЕДОСТИЖИМ (нужно +{t/60:.0f}мин при "
-                   f"потолке рампы 60мин) — БОТ НЕ ВЫСТРЕЛИТ, снизить пол")
-        tg(f"⚠️ [midnight] ДОЛГ ЦЕЛИ УПАЛ: ${p_d:,.0f} → ${d_usd:,.0f} "
-           f"(−${p_d-d_usd:,.0f}, {when}). {verdict}")
-        log(f"АЛЕРТ: долг −${p_d-d_usd:,.0f}; пол достижим={ok} t={t:.0f}с")
-    elif d_usd - p_d >= REPAY_ALERT_USD:
-        tg(f"📈 [midnight] ЦЕЛЬ ВЫРОСЛА: ${p_d:,.0f} → ${d_usd:,.0f} ({when}).")
-        log(f"АЛЕРТ: рост долга +${d_usd-p_d:,.0f}")
-
-    if abs(c_btc - p_c) > COLL_EPS:
-        tg(f"🔧 [midnight] ЗАЛОГ ЦЕЛИ ДВИНУЛСЯ: {p_c:.6f} → {c_btc:.6f} cbBTC ({when}).")
-        log(f"АЛЕРТ: залог {p_c:.6f} → {c_btc:.6f}")
+    # Секция «цель» УДАЛЕНА: она читала ОДНУ захардкоженную позицию и после
+    # перевода на список целей 27.08 стала считать залог кита-1 (WETH, 18 знаков)
+    # в COLL_DEC=8 — прогон выдал «залог 4099327697207 cbBTC» и два ложных алерта.
+    # Вся логика цели теперь в watch_targets(): свои десятичные на каждую цель.
 
     # --- 2. оснащение конкурента ------------------------------------------------------
     # ГЕЙТ (решение kelbic 30.07): следим за конкурентом ТОЛЬКО когда есть цель на видимом
@@ -360,7 +400,8 @@ def main() -> int:
     # адрес крутит сотню транзакций в день при балансе $0.30 и не опасен, а тот, кто реально
     # придёт за окном, скорее всего вообще не в списке наблюдаемых.
     # Гейт снимается САМ, как только у цели снова появится долг и окно окажется близко.
-    target_alive = debt > 0
+    # «цель жива» теперь = жива ЛЮБАЯ из наблюдаемых целей (было: одна захардкоженная)
+    target_alive = any(not tgt_state.get(f"gone_{i}", False) for i in range(len(TARGETS)))
     horizon_ok = 0 < dt <= COMP_HORIZON_SEC
     watch_comp = target_alive and horizon_ok
     if not watch_comp:

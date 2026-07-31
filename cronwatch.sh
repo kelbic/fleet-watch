@@ -72,6 +72,7 @@ REGISTRY=(
   "disloc-watch|chainwatch/disloc_watch.py|120"
   "usde-watch|liquidator/state/usde_cron.sh|3600"
   "usde-hbcheck|liquidator/state/usde_hbcheck.sh|600"
+  "cascade-facts|liquidator/state/cascade_facts_cron.sh|600"
   "shadow-watch-katana|katana-probe/shadow_watch.py|900"
   "exec-wc|wc-executor.lock|60"
   "exec-katana|katana-executor.lock|60"
