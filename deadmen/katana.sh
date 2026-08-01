@@ -1,0 +1,54 @@
+#!/bin/bash
+# Dead-man для katana-бота: алерт в TG, если ГЛАВНЫЙ ЦИКЛ молчит >10 мин.
+#
+# ПОЧЕМУ НЕ mtime ФАЙЛА (инцидент 01.08, стоил 11 часов слепоты).
+# Прежняя версия брала `stat -c %Y executor.log`. Но в этот лог пишет НЕ ОДИН поток:
+# сканер блоков (строки "[HH:MM:SS] block …") и мемпул-слой (строки "MEMPOOL …" и
+# "[mempool] …"). 31.07 в 17:35:22 сканер блоков умер, а мемпул продолжал писать — файл
+# «свежий», деадман молчал. Тревога пришла только в 04:32, когда замолчал и мемпул: 11
+# часов без сканера, отставание 39,506 блоков, процесс при этом ЖИВ и жёг ~98% ядра
+# (state R), то есть ни cron-watchdog, ни flock, ни mtime-деадман его не видели.
+# УРОК: живость ЛОГА ≠ живость ЦИКЛА. Мерить надо тот поток, который делает работу.
+#
+# Теперь возраст считается по последней строке САМОГО сканера. Побочная польза: если
+# сканер жив, а мемпул умер — это видно отдельно (строка в логе, без алерта: мемпул
+# только теневой слой, он не стреляет).
+LOG=/home/claude-agent/.katana-bot/executor.log
+STAMP=/home/claude-agent/.katana-bot/.deadman_alerted
+LIMIT=600
+[ -f "$LOG" ] || exit 0
+
+# Последняя отметка времени сканера блоков. Хвост ограничен: лог растёт до десятков МБ,
+# а нужна только свежая часть; если в хвосте отметок нет — читаем весь файл.
+stamp_of() { grep -aoE '^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] block' "$1" | tail -1 | tr -d '[]' | awk '{print $1}'; }
+last=$(stamp_of <(tail -n 5000 "$LOG"))
+[ -n "$last" ] || last=$(stamp_of "$LOG")
+if [ -z "$last" ]; then
+  # ни одной строки сканера за всю историю файла — это тоже отказ, а не «нет данных»
+  age=$(( $(date +%s) - $(stat -c %Y "$LOG") ))
+  reason="строк сканера в логе НЕТ вовсе; файл молчит ${age}s"
+else
+  now=$(date +%s)
+  t=$(date -d "$last" +%s 2>/dev/null) || t=""
+  # в отметке нет даты: если получилось «будущее», значит строка была вчера
+  [ -n "$t" ] && [ "$t" -gt "$now" ] && t=$(( t - 86400 ))
+  age=$(( now - ${t:-now} ))
+  reason="сканер блоков молчит ${age}s (последняя отметка ${last})"
+fi
+
+if [ "$age" -gt "$LIMIT" ]; then
+  [ -f "$STAMP" ] && [ $(( $(date +%s) - $(stat -c %Y "$STAMP") )) -lt 3600 ] && exit 0
+  token=$(grep '^TELEGRAM_BOT_TOKEN=' /home/claude-agent/.claude/channels/telegram/.env 2>/dev/null | cut -d= -f2-)
+  chat=$(grep '^export KT_CHAT_ID=' /home/claude-agent/.katana-bot/env | head -1 | cut -d= -f2- | awk '{print $1}')
+  # процесс ЖИВ при мёртвом цикле — главный признак этого класса отказа, он и в алерт
+  alive="нет"
+  for p in $(pgrep -x python3 2>/dev/null); do
+    [ "$(readlink /proc/$p/cwd 2>/dev/null)" = "/home/claude-agent/katana-liquidator" ] && alive="ДА (pid $p)"
+  done
+  [ -n "$token" ] && [ -n "$chat" ] && curl -sm 10 "https://api.telegram.org/bot$token/sendMessage" \
+    --data-urlencode "chat_id=$chat" \
+    --data-urlencode "text=💀 katana: ${reason}. Процесс жив: ${alive}. Мемпул мог продолжать писать в лог — mtime тут не показатель (инцидент 01.08)." > /dev/null
+  touch "$STAMP"
+else
+  rm -f "$STAMP"
+fi
