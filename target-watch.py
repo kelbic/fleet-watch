@@ -114,6 +114,8 @@ CHAT_ID = os.environ.get("MN_CHAT_ID", "265715923")
 
 REPAY_ALERT_USD = float(os.environ.get("MN_WATCH_REPAY_USD", "5000"))
 COLL_EPS = 1e-6
+# порог «залог реально двинулся», % от слота: выше суточного начисления обёртки
+COLL_MOVE_PCT = float(os.environ.get("MN_WATCH_COLL_MOVE_PCT", "2"))
 # Порог «чужой ликвидатор» в units репея. Займ рынков окна — USDC (6 знаков) ⇒ units ≈
 # микродоллары, 300_000_000 ≈ $300 = НАШ ПОЛ ОГНЯ (MN_THRESHOLD). Смысл порога именно в
 # этом: ниже пола мы бы не стреляли НИКОГДА, значит чужое взятие — не упущенные деньги,
@@ -297,6 +299,19 @@ def foreign_liquidations(from_block: int, to_block: int) -> list[dict]:
     return out
 
 
+def _slots(fp: str) -> dict:
+    """Отпечаток «k:v,k:v» → {слот: units}. «нет» / пустое → {}."""
+    out = {}
+    for part in (fp or "").split(","):
+        if ":" in part:
+            k, _, v = part.partition(":")
+            try:
+                out[int(k)] = int(v)
+            except ValueError:
+                pass
+    return out
+
+
 def watch_targets(prev: dict) -> dict:
     """Долг/залог по КАЖДОЙ цели. Алерт одноразовый на цель (защёлка `gone_<i>`), как у
     прежней одиночной ветки: 30.07 состояние-вместо-перехода давало 20 сообщений в час."""
@@ -342,9 +357,28 @@ def watch_targets(prev: dict) -> dict:
                f"${p_d:,.0f} → ${d_usd:,.0f} ({d_usd - p_d:+,.0f}), до окна {left:.1f}ч.")
             log(f"АЛЕРТ: {t['name']} долг {p_d:,.0f} → {d_usd:,.0f}")
         if p_c is not None and c_fp != p_c:
-            tg(f"🔧 [midnight] {t['name']}: залог сдвинулся (слоты {p_c} → {c_fp}), "
-               f"до окна {left:.1f}ч.")
-            log(f"АЛЕРТ: {t['name']} залог {p_c} → {c_fp}")
+            # ДОПУСК НА НАЧИСЛЕНИЕ. Отпечаток — сырые units, а обёрточный залог РАСТЁТ сам
+            # (замер 01.08: +1.02 из 191,264 за 30 мин = 0.0005%, ~9%/год). Строгое
+            # равенство строк на таком балансе алертит на каждый тик начисления — 01.08 это
+            # дало две тревоги за полчаса и продолжалось бы вечно. Сигналим только на то,
+            # что делает ЗАЁМЩИК: появление/исчезновение слота (структурное изменение) или
+            # движение слота ≥COLL_MOVE_PCT. Реальный ввод/вывод залога — десятки процентов,
+            # начисление за 25 дней до окна — доли процента, порог их разделяет с запасом.
+            was, now_ = _slots(p_c), _slots(c_fp)
+            structural = set(was) != set(now_)
+            moved = [(k, was[k], now_[k]) for k in set(was) & set(now_)
+                     if was[k] and abs(now_[k] - was[k]) / was[k] * 100 >= COLL_MOVE_PCT]
+            if structural or moved:
+                what = ("состав слотов изменился" if structural else
+                        "; ".join(f"слот {k}: {100 * (b - a) / a:+.2f}%" for k, a, b in moved))
+                tg(f"🔧 [midnight] {t['name']}: ЗАЛОГ ДВИНУЛСЯ — {what} "
+                   f"({p_c} → {c_fp}), до окна {left:.1f}ч.")
+                log(f"АЛЕРТ: {t['name']} залог {p_c} → {c_fp} ({what})")
+            else:
+                d_pct = max((abs(now_[k] - was[k]) / was[k] * 100
+                             for k in set(was) & set(now_) if was[k]), default=0.0)
+                log(f"{t['name']}: залог +{d_pct:.4f}% — начисление, ниже порога "
+                    f"{COLL_MOVE_PCT}%, в лог")
     return st
 
 
