@@ -40,6 +40,8 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, "/home/claude-agent/midnight-liquidator")
+sys.path.insert(0, os.path.expanduser("~/.fleet-watch"))
+from notify import notify  # noqa: E402
 from analysis.keccak import keccak256  # noqa: E402  (pure-stdlib, без зависимостей)
 
 MIDNIGHT = "0xAdedD8ab6dE832766Fedf0FaC4992E5C4D3EA18A"
@@ -109,8 +111,8 @@ RPCS = ["https://mainnet.base.org", "https://base-rpc.publicnode.com",
 STATE = os.path.expanduser("~/.fleet-watch/target-watch.json")
 # «видимый/достижимый горизонт»: ближе этого срока до окна конкурент снова важен
 COMP_HORIZON_SEC = float(os.environ.get("MN_COMP_HORIZON_DAYS", "7")) * 86400
-TG_ENV = os.path.expanduser("~/.claude/channels/telegram/.env")
-CHAT_ID = os.environ.get("MN_CHAT_ID", "265715923")
+# Отправка ушла в общефлотский маршрутизатор (~/.fleet-watch/notify.py): токен, чат,
+# подпись отправителя и сторож транспорта теперь в одной точке на весь флот.
 
 REPAY_ALERT_USD = float(os.environ.get("MN_WATCH_REPAY_USD", "5000"))
 COLL_EPS = 1e-6
@@ -221,9 +223,13 @@ def arm_race(reason: str, dt: int) -> None:
         log(f"race уже включён (пол ${floor:,.0f}) — {reason}, действий не нужно")
         return
     if dt <= SWITCH_MARGIN_SEC:
+        # ЕДИНСТВЕННЫЙ HIL этого вотчера: рестарт в боевом окне стоит 40-60с слепоты, и
+        # платить эту цену — распоряжение живым огнём, а не техническая починка. Агент
+        # такое не решает (пункт 4 критерия), поэтому будим человека.
         tg(f"🚨 [midnight] {reason}\nПРОФИЛЬ НЕ ТРОГАЮ: до/после окна осталось "
            f"{dt}с (<{SWITCH_MARGIN_SEC:.0f}с) — рестарт стоит 40-60с слепоты, а это уже "
-           f"время боя. НУЖНО РЕШЕНИЕ ЧЕЛОВЕКА: {PROFILE_SH} race")
+           f"время боя. НУЖНО РЕШЕНИЕ ЧЕЛОВЕКА: {PROFILE_SH} race",
+           hil=True, key="race-margin", dedup_sec=3600)
         log(f"АЛЕРТ: {reason}; автоперевод заблокирован (dt={dt}с)")
         return
     # Гард НА САМОМ ДЕЙСТВИИ, тот же флаг, что закрывает TG: забыть отдельный невозможно.
@@ -246,26 +252,17 @@ def arm_race(reason: str, dt: int) -> None:
         log(f"автоперевод упал: {e}")
 
 
-def tg(text: str) -> None:
-    # Сторож НА ТРАНСПОРТЕ (урок 19.07: заглушка, которую тест обязан не забыть, не держит
-    # границу — первый забывший достучался до человека). MN_WATCH_MUTE=1 закрывает канал.
-    if os.environ.get("MN_WATCH_MUTE") == "1":
-        print(f"[tg muted] {text}")
-        return
-    try:
-        token = None
-        with open(TG_ENV) as f:
-            for ln in f:
-                if ln.startswith("TELEGRAM_BOT_TOKEN="):
-                    token = ln.split("=", 1)[1].strip()
-        if not token:
-            return
-        data = urllib.parse.urlencode({"chat_id": CHAT_ID, "text": text}).encode()
-        urllib.request.urlopen(
-            urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage",
-                                   data=data), timeout=20)
-    except Exception as e:  # noqa: BLE001
-        print(f"alert fail: {e}")
+def tg(text: str, *, hil: bool = False, key: str = "", dedup_sec: float = 0.0) -> None:
+    """Тревога вотчера. АДРЕСАТ ПО УМОЛЧАНИЮ — АГЕНТ, не человек (решение 03.08).
+
+    Почти всё, что видит этот вотчер, агент разбирает сам: конкурент заправился, залог
+    кита двинулся, чужой забрал позицию, долг изменился. Человеку тут решать нечего, пока
+    дело не упрётся в его подпись — и такой случай здесь ровно один (см. arm_race).
+
+    Сторож на транспорте живёт теперь в notify.muted(): MN_WATCH_MUTE=1 по-прежнему
+    закрывает канал, плюс добавилось автоопределение тестового прогона.
+    """
+    notify(text, source="midnight", hil=hil, key=key, dedup_sec=dedup_sec)
 
 
 def log(msg: str) -> None:

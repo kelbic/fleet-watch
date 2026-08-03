@@ -24,8 +24,12 @@ STAMP=/home/claude-agent/.midnight-bot/.deadman_alerted
 # В executor.log пишет не только рабочий цикл: у katana мемпул-слой держал файл «свежим»
 # 11 часов после смерти сканера блоков, и mtime-деадман молчал всё это время (отставание
 # 39,506 блоков, процесс жив и жёг ~98% ядра). Живость ЛОГА ≠ живость ЦИКЛА.
-_last=$(grep -aoE '^\\[sched [0-9]{2}:[0-9]{2}:[0-9]{2}\\]' <(tail -n 5000 "$LOG") | tail -1 | tr -d '[]' | awk '{print $2}')
-[ -n "$_last" ] || _last=$(grep -aoE '^\\[sched [0-9]{2}:[0-9]{2}:[0-9]{2}\\]' "$LOG" | tail -1 | tr -d '[]' | awk '{print $2}')
+# КОНВЕЙЕР, а не <(...): process substitution отдаёт grep'у /dev/fd/N как ИМЯ ФАЙЛА,
+# и в части оболочек оно читается пустым — отметка молча не извлекалась, деадман
+# сваливался на mtime-фолбэк и снова мерил не цикл, а файл (та самая слепота 01.08).
+_stamp() { grep -aoE '^\[sched [0-9]{2}:[0-9]{2}:[0-9]{2}\]' | tail -1 | tr -d '[]' | awk '{print $2}'; }
+_last=$(tail -n 5000 "$LOG" | _stamp)
+[ -n "$_last" ] || _last=$(_stamp < "$LOG")
 if [ -n "$_last" ]; then
   _now=$(date +%s); _t=$(date -d "$_last" +%s 2>/dev/null || echo "")
   [ -n "$_t" ] && [ "$_t" -gt "$_now" ] && _t=$(( _t - 86400 ))   # отметка без даты: вчера
@@ -48,9 +52,10 @@ if [ "$age" -gt "$limit" ]; then
   token=$(grep '^TELEGRAM_BOT_TOKEN=' /home/claude-agent/.claude/channels/telegram/.env 2>/dev/null | cut -d= -f2-)
   chat=$(grep -E '^(export )?MN_CHAT_ID=' /home/claude-agent/.midnight-bot/env 2>/dev/null | head -1 | cut -d= -f2- | awk '{print $1}')
   [ -n "$chat" ] || chat=265715923
-  [ -n "$token" ] && curl -sm 10 "https://api.telegram.org/bot$token/sendMessage" \
-    --data-urlencode "chat_id=$chat" \
-    --data-urlencode "text=💀 [midnight] executor: лог молчит ${age}s (порог ${limit}s = проход ${base}s ×2 +120, режим ${mode:-?}) — завис. Cron-watchdog не поможет: процесс жив и держит flock." > /dev/null
+  # АДРЕСАТ — АГЕНТ (03.08): снять залипший процесс и дать крону поднять — его работа.
+  /home/claude-agent/.fleet-watch/notify.sh midnight-deadman 0 \
+    "💀 [midnight] executor: главный цикл молчит ${age}s (порог ${limit}s = проход ${base}s ×2 +120, режим ${mode:-?}) — завис. Cron-watchdog не поможет: процесс жив и держит flock." \
+    3600 mn-dead > /dev/null
   touch "$STAMP"
 # else: НЕ трогаем STAMP. Раньше здесь был rm -f STAMP, и он стирал часовой дедуп на каждом
 # тике в конце прохода — соседние медленные проходы алертили заново (спам 22.07). Теперь штамп

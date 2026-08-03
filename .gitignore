@@ -6,3 +6,12 @@
 *state*.json
 target-watch.json
 __pycache__/
+# рантайм маршрутизатора тревог (03.08): очередь, дедуп, штампы, логи сессий
+agent-inbox.jsonl
+agent-inbox.jsonl.muted
+agent-inbox.handled.jsonl
+agent-wake-sessions.log
+agent-wake.log
+notify-dedup.json
+notify.log
+.agent-wake-stamp

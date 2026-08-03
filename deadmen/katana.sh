@@ -20,9 +20,12 @@ LIMIT=600
 
 # Последняя отметка времени сканера блоков. Хвост ограничен: лог растёт до десятков МБ,
 # а нужна только свежая часть; если в хвосте отметок нет — читаем весь файл.
-stamp_of() { grep -aoE '^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] block' "$1" | tail -1 | tr -d '[]' | awk '{print $1}'; }
-last=$(stamp_of <(tail -n 5000 "$LOG"))
-[ -n "$last" ] || last=$(stamp_of "$LOG")
+# Читает СТДИН, а не имя файла: process substitution подсовывает /dev/fd/N, которое в
+# части оболочек читается пустым — отметка не извлекалась бы, и деадман тихо сползал бы
+# на mtime-фолбэк, то есть ровно в слепоту 01.08, которую он и закрывает.
+stamp_of() { grep -aoE '^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] block' | tail -1 | tr -d '[]' | awk '{print $1}'; }
+last=$(tail -n 5000 "$LOG" | stamp_of)
+[ -n "$last" ] || last=$(stamp_of < "$LOG")
 if [ -z "$last" ]; then
   # ни одной строки сканера за всю историю файла — это тоже отказ, а не «нет данных»
   age=$(( $(date +%s) - $(stat -c %Y "$LOG") ))
@@ -45,9 +48,10 @@ if [ "$age" -gt "$LIMIT" ]; then
   for p in $(pgrep -x python3 2>/dev/null); do
     [ "$(readlink /proc/$p/cwd 2>/dev/null)" = "/home/claude-agent/katana-liquidator" ] && alive="ДА (pid $p)"
   done
-  [ -n "$token" ] && [ -n "$chat" ] && curl -sm 10 "https://api.telegram.org/bot$token/sendMessage" \
-    --data-urlencode "chat_id=$chat" \
-    --data-urlencode "text=💀 katana: ${reason}. Процесс жив: ${alive}. Мемпул мог продолжать писать в лог — mtime тут не показатель (инцидент 01.08)." > /dev/null
+  # АДРЕСАТ — АГЕНТ (03.08): перезапуск и снятие спина в его власти, человеку решать нечего.
+  /home/claude-agent/.fleet-watch/notify.sh katana-deadman 0 \
+    "💀 katana: ${reason}. Процесс жив: ${alive}. Мемпул мог продолжать писать в лог — mtime тут не показатель (инцидент 01.08)." \
+    3600 katana-dead > /dev/null
   touch "$STAMP"
 else
   rm -f "$STAMP"

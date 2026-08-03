@@ -108,19 +108,13 @@ tg() {  # $1=текст. МЬЮТ НА ТРАНСПОРТЕ: при CW_MUTE=1 cu
   if [ "${CW_MUTE:-0}" = "1" ]; then
     echo "[tg muted] $1" >> "$LOG"; return 0
   fi
-  local token chat
-  token=$(grep '^TELEGRAM_BOT_TOKEN=' /home/claude-agent/.claude/channels/telegram/.env 2>/dev/null | cut -d= -f2-)
-  chat=$(grep -E '^(export )?MN_CHAT_ID=' /home/claude-agent/.midnight-bot/env 2>/dev/null | head -1 | cut -d= -f2- | awk '{print $1}')
-  [ -n "${chat:-}" ] || chat=265715923
-  [ -n "${token:-}" ] || { echo "[tg НЕТ ТОКЕНА] $1" >> "$LOG"; return 1; }
-  # Ответ API НЕ глушим: молча не дошедшая тревога — тот же мёртвый сторож, только
-  # на уровень ниже. Провал доставки обязан оставить след в логе.
+  # АДРЕСАТ — АГЕНТ (03.08): упавший крон агент чинит сам. Провал доставки обязан
+  # оставить след в логе — молча не дошедшая тревога есть тот же мёртвый сторож.
   local resp
-  resp=$(curl -sm 10 "https://api.telegram.org/bot$token/sendMessage" \
-    --data-urlencode "chat_id=$chat" --data-urlencode "text=$1" 2>&1)
+  resp=$(/home/claude-agent/.fleet-watch/notify.sh cronwatch 0 "$1" 3600 cronwatch 2>&1)
   case "$resp" in
-    *'"ok":true'*) return 0 ;;
-    *) echo "[tg НЕ ДОСТАВЛЕНО] ${resp:0:200}" >> "$LOG"; return 1 ;;
+    inbox|tg|dedup|muted) return 0 ;;
+    *) echo "[notify НЕ ПРИНЯЛ] ${resp:0:200}" >> "$LOG"; return 1 ;;
   esac
 }
 

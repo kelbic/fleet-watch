@@ -57,11 +57,10 @@ if [ "$(wc -l < "$LOG" 2>/dev/null || echo 0)" -gt 20000 ]; then
   tail -n 10000 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
 fi
 
-send() {  # $1 = текст
-  token=$(grep '^TELEGRAM_BOT_TOKEN=' /home/claude-agent/.claude/channels/telegram/.env 2>/dev/null | cut -d= -f2-)
-  [ -n "$token" ] || return 0
-  curl -sm 10 "https://api.telegram.org/bot$token/sendMessage" \
-    --data-urlencode "chat_id=265715923" --data-urlencode "text=$1" > /dev/null
+send() {  # $1 = текст. АДРЕСАТ — АГЕНТ (03.08): сетевой провал VPS человек не чинит.
+  # При мёртвом egress запись в инбокс всё равно проходит (это локальный файл), и агент
+  # разберёт её, когда сеть вернётся — тревога не теряется, а просто ждёт.
+  /home/claude-agent/.fleet-watch/notify.sh netwatch 0 "$1" 900 netwatch > /dev/null
 }
 
 if [ "$ok" -eq 0 ]; then
