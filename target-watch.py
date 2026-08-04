@@ -55,10 +55,15 @@ TARGETS = [
      "market": "0xf27319855df886a604dda3d5675007f0aa6eee504c99f1d789c86b21075f7c20",
      "borrower": "0xfb94d3404c1d3d9d6f08f79e58041d5ea95accfa",
      "maturity": 1787788800, "loan_dec": 6, "coll_dec": 18, "coll": "WETH"},
-    {"name": "кит-2 27.08 ~$187k",
+    # 04.08 разбор тревог «+$12k долг / залог +6.16%»: кит долил плечо через Tenor
+    # (tx 0xe94dcc27…, блок 49515712) — кредитор 0x78266e3c внёс $12,000, долг вырос на
+    # $12,008.10, выручка + $314.21 своих USDC заёмщика реинвестированы в залог. Слот 1 —
+    # НЕ cbBTC: это обёртка 'cbBTC-USDC-collat' 0xf6a70085 (18 знаков, ≈$1.003/юнит,
+    # USDC в Morpho-vault 0xb9093c5e) — растёт начислением, отсюда и допуск 0f76f1a.
+    {"name": "кит-2 27.08 ~$207k",
      "market": "0x44495af1cca7842191a65a73978e01ed72238731e193c3b11460083efd60a318",
      "borrower": "0xd75ffb585ff88d3aa50b7cf9230b27a7eb923c20",
-     "maturity": 1787788800, "loan_dec": 6, "coll_dec": 8, "coll": "cbBTC"},
+     "maturity": 1787788800, "loan_dec": 6, "coll_dec": 18, "coll": "cbBTC-USDC-collat"},
 ]
 # Совместимость с остальным файлом (секции конкурента и чужих ликвидаций): «главная» цель.
 MARKET = TARGETS[0]["market"]
@@ -157,8 +162,11 @@ def rpc(method: str, params: list):
     last = None
     for url in RPCS:
         try:
+            # UA обязателен: часть публичных RPC отдаёт 403 на дефолтный urllib-UA
+            # (флот-урок SEND-3 17.07; здесь 19 перемежающихся отказов скана за 02-04.08)
             req = urllib.request.Request(url, data=body,
-                                         headers={"Content-Type": "application/json"})
+                                         headers={"Content-Type": "application/json",
+                                                  "User-Agent": "fleet-watch/1.0"})
             with urllib.request.urlopen(req, timeout=15) as r:
                 d = json.load(r)
             if "result" in d:
