@@ -46,16 +46,41 @@ lastpass=$(grep -oE 'за [0-9]+с' "$LOG" | tail -8 | grep -oE '[0-9]+' | sort 
 base=$promised; [ "$lastpass" -gt "$base" ] && base=$lastpass
 limit=$(( base * 2 + 120 ))
 
+# ЖИВ-НО-МЕДЛЕННЫЙ ≠ ЗАВИС (инцидент 04.08): RPC-шторм дал упавший проход ~44с
+# («sched err», БЕЗ штампа) + FULL 165с — штампы молчали 214с, деадман крикнул «завис»
+# за 3с до того, как проход сам дописался. У midnight в stdout пишет ТОЛЬКО главный
+# цикл (worker-треды rpc.py молчат — это НЕ katana с её мемпул-слоем), поэтому ЛЮБАЯ
+# строка цикла — доказательство живости, даже без временной отметки. Возраст безштамповой
+# строки не узнать, но узнать её НОВИЗНУ: если счётчик строк цикла вырос с прошлого
+# прогона (крон */10), цикл давал выход в последние ≤10 мин — это деградация, не стоп.
+# Деградацию бот чинит сам (ротация эндпоинтов, 🐌-сигнал); алертим только если она
+# держит штампы немыми дольше DEGR_CAP — «жив, но проходы не завершаются» тоже отказ.
+STATE=/home/claude-agent/.midnight-bot/.deadman_state   # "<inode> <счётчик строк цикла>"
+DEGR_CAP=1800
+_loops=$(grep -acE '^\[sched [0-9]{2}:[0-9]{2}:[0-9]{2}\]|^sched err:|^\[tick\]|^  multicall prefetch fail' "$LOG")
+_ino=$(stat -c %i "$LOG")
+_grew=0
+if [ -f "$STATE" ]; then
+  read -r _pino _ploops < "$STATE"
+  # copytruncate-ротация не меняет inode, но роняет счётчик — тогда сравнение
+  # невалидно и grew остаётся 0 (консервативно: не подавляем)
+  [ "$_pino" = "$_ino" ] && [ "${_ploops:-0}" -lt "$_loops" ] 2>/dev/null && _grew=1
+fi
+printf '%s %s\n' "$_ino" "$_loops" > "$STATE"
+
 if [ "$age" -gt "$limit" ]; then
+  if [ "$_grew" = 1 ] && [ "$age" -le "$DEGR_CAP" ]; then
+    exit 0    # цикл давал выход в последние ≤10 мин: медленный/падающий проход, ждём
+  fi
   [ -f "$STAMP" ] && [ $(( $(date +%s) - $(stat -c %Y "$STAMP") )) -lt 3600 ] && exit 0
   mode=$(grep -oE '\] [A-Z]+/[A-Z]+' "$LOG" | tail -1 | awk '{print $2}')
-  token=$(grep '^TELEGRAM_BOT_TOKEN=' /home/claude-agent/.claude/channels/telegram/.env 2>/dev/null | cut -d= -f2-)
-  chat=$(grep -E '^(export )?MN_CHAT_ID=' /home/claude-agent/.midnight-bot/env 2>/dev/null | head -1 | cut -d= -f2- | awk '{print $1}')
-  [ -n "$chat" ] || chat=265715923
+  if [ "$_grew" = 1 ]; then
+    msg="⚠️ [midnight] executor: цикл ЖИВ (строки идут), но успешного прохода нет ${age}s (>${DEGR_CAP}s) — RPC-деградация держит проходы, режим ${mode:-?}. Смотреть хвост executor.log."
+  else
+    msg="💀 [midnight] executor: главный цикл молчит ${age}s (порог ${limit}s = проход ${base}s ×2 +120, режим ${mode:-?}) — завис. Cron-watchdog не поможет: процесс жив и держит flock."
+  fi
   # АДРЕСАТ — АГЕНТ (03.08): снять залипший процесс и дать крону поднять — его работа.
-  /home/claude-agent/.fleet-watch/notify.sh midnight-deadman 0 \
-    "💀 [midnight] executor: главный цикл молчит ${age}s (порог ${limit}s = проход ${base}s ×2 +120, режим ${mode:-?}) — завис. Cron-watchdog не поможет: процесс жив и держит flock." \
-    3600 mn-dead > /dev/null
+  /home/claude-agent/.fleet-watch/notify.sh midnight-deadman 0 "$msg" 3600 mn-dead > /dev/null
   touch "$STAMP"
 # else: НЕ трогаем STAMP. Раньше здесь был rm -f STAMP, и он стирал часовой дедуп на каждом
 # тике в конце прохода — соседние медленные проходы алертили заново (спам 22.07). Теперь штамп
