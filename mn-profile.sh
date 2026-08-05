@@ -26,12 +26,17 @@ set -euo pipefail
 ENV=/home/claude-agent/.midnight-bot/env
 LOG=/home/claude-agent/.midnight-bot/executor.log
 
+# PID midnight — ТОЛЬКО через fleetctl (cwd-признак). Отбор по шаблону cmdline — лотерея:
+# у всех ботов флота одна командная строка, а `apply` этим PID'ом ещё и убивает (см. шапку
+# fleetctl.sh, инцидент 05.08 — шаблон погасил katana при рестарте hyperlend).
+mn_pid() { /home/claude-agent/.fleet-watch/fleetctl.sh pid midnight 2>/dev/null || true; }
+
 cur() { grep -oE '^export MN_MIN_PROFIT=[0-9]+' "$ENV" | cut -d= -f2; }
 cur_refresh() { grep -oE '^export MN_HOT_REFRESH=[0-9]+' "$ENV" | cut -d= -f2 || echo "600(деф)"; }
 
 status() {
   echo "профиль: пол=\$$(cur)  FULL-скан=$(cur_refresh)с"
-  local p; p=$(pgrep -f '[b]ot\.executor schedule' | head -1 || true)
+  local p; p=$(mn_pid)
   if [ -n "$p" ]; then
     echo "процесс: pid $p, живёт $(ps -p "$p" -o etime= | tr -d ' ')"
     echo "в процессе: $(tr '\0' '\n' < /proc/"$p"/environ | grep -E 'MN_MIN_PROFIT|MN_HOT_REFRESH' | tr '\n' ' ')"
@@ -47,12 +52,12 @@ apply() {  # $1=floor $2=refresh $3=имя
   sed -i -E "/^export MN_HOT_REFRESH=/d" "$ENV"
   echo "export MN_HOT_REFRESH=$2   # профиль $3" >> "$ENV"
   echo "env: пол=\$$1 FULL-скан=$2с (профиль $3)"
-  local p; p=$(pgrep -f '[b]ot\.executor schedule' | head -1 || true)
+  local p; p=$(mn_pid)
   [ -n "$p" ] && { kill "$p"; echo "процесс $p снят — cron поднимет ≤60с"; }
   echo -n "жду возврата"
   for _ in $(seq 1 24); do
     sleep 5; echo -n "."
-    p=$(pgrep -f '[b]ot\.executor schedule' | head -1 || true)
+    p=$(mn_pid)
     if [ -n "$p" ]; then
       echo " ПОДНЯЛСЯ pid $p"
       tr '\0' '\n' < /proc/"$p"/environ | grep -E 'MN_MIN_PROFIT|MN_HOT_REFRESH'
