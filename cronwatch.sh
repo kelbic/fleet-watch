@@ -69,6 +69,7 @@ REGISTRY=(
   "target-watch|fleet-watch/target-watch.py|900"
   "mglo-watch|chainwatch/mglo_watch.py|3600"
   "sow-watch|chainwatch/sow_watch.py|21600"
+  "sow-watch-hl|morpho_sow_watch.lock|21600"
   "disloc-watch|chainwatch/disloc_watch.py|120"
   "usde-watch|liquidator/state/usde_cron.sh|3600"
   "usde-hbcheck|liquidator/state/usde_hbcheck.sh|600"
