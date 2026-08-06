@@ -51,10 +51,16 @@ MIDNIGHT = "0xAdedD8ab6dE832766Fedf0FaC4992E5C4D3EA18A"
 # испарится (как $100,214 у 0xd418224ae3), мы узнаем в момент гашения, а не на предбоевом
 # скане, и не потратим планирование на несуществующую цель.
 TARGETS = [
+    # coll_move_pct: 0 — залог ЧИСТЫЙ WETH, начисления нет вовсе ⇒ любое движение слота =
+    # действие заёмщика. Общий допуск 2% ставился под обёртку кита-2 и здесь глушил бы
+    # реальные вводы/выводы: 05.08 довзнос +4.83 WETH (+1.17%, tx 0xf7e70b95…, долив плеча
+    # через Tenor как 04.08) ушёл в лог с ложной пометкой «начисление» — а тихий ВЫВОД
+    # <2% WETH (сигнал подготовки к погашению) прошёл бы так же молча.
     {"name": "кит-1 27.08 ~$346k",
      "market": "0xf27319855df886a604dda3d5675007f0aa6eee504c99f1d789c86b21075f7c20",
      "borrower": "0xfb94d3404c1d3d9d6f08f79e58041d5ea95accfa",
-     "maturity": 1787788800, "loan_dec": 6, "coll_dec": 18, "coll": "WETH"},
+     "maturity": 1787788800, "loan_dec": 6, "coll_dec": 18, "coll": "WETH",
+     "coll_move_pct": 0.0},
     # 04.08 разбор тревог «+$12k долг / залог +6.16%»: кит долил плечо через Tenor
     # (tx 0xe94dcc27…, блок 49515712) — кредитор 0x78266e3c внёс $12,000, долг вырос на
     # $12,008.10, выручка + $314.21 своих USDC заёмщика реинвестированы в залог. Слот 1 —
@@ -381,8 +387,9 @@ def watch_targets(prev: dict) -> dict:
             # начисление за 25 дней до окна — доли процента, порог их разделяет с запасом.
             was, now_ = _slots(p_c), _slots(c_fp)
             structural = set(was) != set(now_)
+            move_pct = t.get("coll_move_pct", COLL_MOVE_PCT)
             moved = [(k, was[k], now_[k]) for k in set(was) & set(now_)
-                     if was[k] and abs(now_[k] - was[k]) / was[k] * 100 >= COLL_MOVE_PCT]
+                     if was[k] and abs(now_[k] - was[k]) / was[k] * 100 > move_pct]
             if structural or moved:
                 what = ("состав слотов изменился" if structural else
                         "; ".join(f"слот {k}: {100 * (b - a) / a:+.2f}%" for k, a, b in moved))
@@ -392,8 +399,8 @@ def watch_targets(prev: dict) -> dict:
             else:
                 d_pct = max((abs(now_[k] - was[k]) / was[k] * 100
                              for k in set(was) & set(now_) if was[k]), default=0.0)
-                log(f"{t['name']}: залог +{d_pct:.4f}% — начисление, ниже порога "
-                    f"{COLL_MOVE_PCT}%, в лог")
+                log(f"{t['name']}: залог +{d_pct:.4f}% — ниже порога "
+                    f"{move_pct}% (начисление обёртки), в лог")
     return st
 
 
