@@ -164,4 +164,17 @@ def notify(text: str, *, source: str, hil: bool = False, key: str = "",
         return "muted"
     ok = _tg(text)
     _log(f"notify[{source}] → HIL человеку: отправлен={ok}: {text[:120]}")
+    if ok:
+        # Запись легла в инбокс ДО отправки (падение посреди _tg не теряет тревогу), но
+        # доставленное человеку агент разбирать не должен — иначе каждый HIL бумерангом
+        # будит сессию на собственную эскалацию (07.08: рапорт base-liquidator ушёл в TG
+        # и следом поднял агента). Помечаем доставку добавочной handled-копией: инбокс
+        # append-only для всех, кроме agent-wake (он схлопывает пары merged-перезаписью);
+        # переписывать файл отсюда нельзя — параллельный notify() дописывает в него же.
+        try:
+            with open(path, "a") as f:
+                f.write(json.dumps({**rec, "handled": True, "outcome": "tg"},
+                                   ensure_ascii=False) + "\n")
+        except OSError as e:
+            _log(f"notify[{source}]: tg-надгробие не записано: {e}")
     return "tg" if ok else "inbox"

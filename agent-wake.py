@@ -2,8 +2,10 @@
 """Будильник агента: разбирает инбокс тревог, поднимая headless-сессию Claude.
 
 Вторая половина решения 03.08 («алерты будят тебя, а не эскалируются на меня»). notify.py
-кладёт всё не-HIL в ~/.fleet-watch/agent-inbox.jsonl; этот скрипт по крону смотрит, есть
-ли неразобранное, и если есть — поднимает сессию, которая чинит.
+кладёт ВСЁ в ~/.fleet-watch/agent-inbox.jsonl (HIL — до отправки в TG, чтобы падение
+посреди отправки не теряло тревогу; при доставке следом ложится handled-копия, и пара
+схлопывается здесь). Этот скрипт по крону смотрит, есть ли неразобранное, и если есть —
+поднимает сессию, которая чинит.
 
 ГАРДЫ (иначе будильник сам станет источником вреда):
   • частота: не чаще WAKE_GAP_SEC (умолчание 1ч). Тревоги копятся и разбираются пачкой —
@@ -116,6 +118,20 @@ def main() -> int:
     if os.environ.get("FLEET_WAKE") == "0":
         return 0
     recs = _read(INBOX)
+    # HIL-записи, доставленные в TG, notify() помечает добавочной handled-копией
+    # (append-only, см. комментарий там). Схлопываем пары: доставленное человеку агент
+    # не разбирает — в архив с outcome=tg-delivered, из инбокса вон (обе копии).
+    tombstones = [r for r in recs if r.get("handled")]
+    handled_ids = {_ident(r) for r in tombstones}
+    delivered = [r for r in recs if not r.get("handled") and _ident(r) in handled_ids]
+    if delivered or tombstones:
+        for r in delivered:
+            r["handled"] = True
+            r["outcome"] = "tg-delivered"
+        _append(HANDLED, delivered)
+        # выносим и осиротевшие надгробия (пара уже ушла) — иначе копятся в инбоксе вечно
+        _rewrite_merged(delivered + tombstones)
+        recs = _read(INBOX)
     pending = [r for r in recs if not r.get("handled")]
     if not pending:
         return 0

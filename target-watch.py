@@ -544,7 +544,7 @@ def watch_targets(prev: dict) -> dict:
                 d_pct = max((abs(now_[k] - was[k]) / was[k] * 100
                              for k in set(was) & set(now_) if was[k]), default=0.0)
                 log(f"{t['name']}: залог +{d_pct:.4f}% — ниже порога "
-                    f"{move_pct}% (начисление обёртки), в лог")
+                    f"({move_pct}% / пыль {dust} units), в лог")
     return st
 
 
