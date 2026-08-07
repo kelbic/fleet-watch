@@ -317,6 +317,99 @@ def log(msg: str) -> None:
     print(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {msg}", flush=True)
 
 
+# --- метаданные рынков окна (кэш боевого бота — единственный авторитет по токенам/оракулам)
+# ЗАЧЕМ (07.08): сумма чужого взятия делилась на 1e6 ДЛЯ ВСЕХ рынков — это LOAN_DEC главной
+# цели, а не рынка события. После перенацеливания радара 06.08 в списке 5 рынков с займом
+# WETH (18 знаков): там порог 300_000_000 units не отсекал НИЧЕГО (проходила пыль от
+# 3e-10 WETH), а сумма в алерте завышалась в ~10^12. Мина под окно: пять рынков, на которых
+# радар кричал бы на каждую пыль и называл её сотнями миллионов долларов.
+MARKETS_CACHE = "/home/claude-agent/midnight-liquidator/data/midnight_markets.json"
+ORACLE_PRICE_SCALE = 10 ** 36          # IOracle.price(): масштаб Midnight/Blue
+SEL_PRICE = "0xa035b1fe"               # price()
+# Доллары считаем ТОЛЬКО по долларовым стейблам. EURC сюда сознательно не входит: это евро
+# (≈$1.08) — называть его долларами та же ошибка масштаба, просто на 8%, а не на 10^12.
+USD_STABLES = {"USDC", "USDT", "DAI", "USDbC"}
+# Пол огня в не-долларовом займе: перевести $300 не по чему — котировки самого loan-токена у
+# радара нет, а тянуть квотер в вотчер значит завести второй боевой контур ради телеметрии.
+# Берём статический эквивалент и честно помечаем: это ТЕЛЕМЕТРИЧЕСКИЙ порог, не решение об
+# огне. При сильном движении ETH пересмотреть (MN_WATCH_FOREIGN_WETH).
+FOREIGN_MIN_WETH = float(os.environ.get("MN_WATCH_FOREIGN_WETH", "0.15"))  # ≈$290 при ETH $1910
+_MKT_META: dict | None = None
+
+
+def market_meta() -> dict:
+    """{id: {loan_sym, loan_dec, usd, floor_units, colls:{token:(oracle,dec,sym)}}} из кэша.
+
+    Тот же файл, что кормит executor (канон: полные id и токены — только из кэша, не руками).
+    Нет файла или нет рынка ⇒ {} по этому id, и вызывающий деградирует к прежнему поведению
+    (units + пометка «знаки неизвестны»): молчать из-за отсутствия метаданных нельзя.
+    """
+    global _MKT_META
+    if _MKT_META is not None:
+        return _MKT_META
+    _MKT_META = {}
+    try:
+        blob = json.load(open(MARKETS_CACHE))
+    except Exception as e:  # noqa: BLE001
+        log(f"кэш рынков недоступен ({e}) — суммы чужих взятий останутся в units")
+        return _MKT_META
+    toks = {a.lower(): t for a, t in (blob.get("tokens") or {}).items()}
+    for m in blob.get("markets") or []:
+        lt = (m.get("loanToken") or "").lower()
+        ti = toks.get(lt, {})
+        sym = ti.get("symbol") or lt[:10]
+        dec = int(ti.get("decimals", 18))
+        usd = sym in USD_STABLES
+        if usd:
+            floor = FOREIGN_MIN_UNITS if dec == 6 else int(300 * 10 ** dec)
+        elif sym == "WETH":
+            floor = int(FOREIGN_MIN_WETH * 10 ** dec)
+        else:                      # прочие не-доллары (EURC): порог в единицах токена
+            floor = int(300 * 10 ** dec)
+        colls = {}
+        for cp in m.get("collateralParams") or []:
+            ct = (cp.get("token") or "").lower()
+            cti = toks.get(ct, {})
+            colls[ct] = (cp.get("oracle"), int(cti.get("decimals", 18)),
+                         cti.get("symbol") or ct[:10])
+        _MKT_META[(m.get("id") or "").lower()] = {
+            "loan_sym": sym, "loan_dec": dec, "usd": usd,
+            "floor_units": floor, "colls": colls}
+    return _MKT_META
+
+
+def fmt_loan(units: int, meta: dict) -> str:
+    """Сумма в валюте займа РЫНКА СОБЫТИЯ. Доллар печатаем только для долларового стейбла."""
+    if not meta:
+        return f"{units} units (знаки неизвестны)"
+    amt = units / 10 ** meta["loan_dec"]
+    if meta["usd"]:
+        return f"${amt:,.2f}"
+    return f"{amt:,.4f} {meta['loan_sym']}"
+
+
+def missed_prize(f: dict, meta: dict) -> str | None:
+    """Упущенный приз = стоимость сейзнутого залога по оракулу − репей, в единицах займа.
+
+    ЭТО ОЦЕНКА ПО ОРАКУЛУ, А НЕ ЦЕНА ВЫХОДА: реальная выручка конкурента ниже на слиппедж и
+    газ (урок «цена оракула ≠ цена выхода» — там оценка потока разошлась с фактом в 23 раза).
+    Нет оракула/цены ⇒ None: молча завышенное число хуже отсутствующего.
+    """
+    if not meta or not f.get("seized") or not f.get("collateral"):
+        return None
+    orc = (meta["colls"].get(f["collateral"]) or (None, None, None))[0]
+    if not orc:
+        return None
+    try:
+        price = int(rpc("eth_call", [{"to": orc, "data": SEL_PRICE}, "latest"]), 16)
+    except Exception:  # noqa: BLE001 — цена оракула не обязана быть доступной
+        return None
+    if price <= 0:
+        return None
+    value = f["seized"] * price // ORACLE_PRICE_SCALE
+    return fmt_loan(value - f["repaid"], meta)
+
+
 def foreign_liquidations(from_block: int, to_block: int) -> list[dict]:
     """События Liquidate на рынках ОКНА от caller вне белого списка.
 
@@ -338,6 +431,10 @@ def foreign_liquidations(from_block: int, to_block: int) -> list[dict]:
         if caller.lower() in KNOWN_LIQUIDATORS:
             continue
         out.append({"caller": caller.lower(), "market": lg["topics"][1],
+                    # topics[2] = токен залога (indexed): нужен, чтобы найти его оракул
+                    # и посчитать упущенный приз стоимостью сейзнутого
+                    "collateral": ("0x" + lg["topics"][2][-40:]).lower(),
+                    "seized": int(data[64:64 * 2], 16),
                     "repaid": int(data[64 * 2:64 * 3], 16),
                     "post": bool(int(data[64 * 3:64 * 4], 16)),
                     "block": int(lg["blockNumber"], 16)})
@@ -552,13 +649,15 @@ def main() -> int:
     try:
         for f in foreign_liquidations(max(frm, head - 50_000), head):
             c = f["caller"].lower()
+            # метаданные РЫНКА СОБЫТИЯ: знаки займа, его валюта и пол в её единицах
+            meta = market_meta().get(f["market"].lower(), {})
             if c not in seen_callers:
                 seen_callers.add(c)
                 if baseline:
                     log(f"базлайн незнакомых: запомнил {c} (первый запуск, без алерта)")
                     continue
                 tg(f"🆕 [midnight] НОВЫЙ ЛИКВИДАТОР на рынках окна: {f['caller']} "
-                   f"(первое появление, блок {f['block']}, ~${f['repaid'] / 1e6:,.2f}). "
+                   f"(первое появление, блок {f['block']}, {fmt_loan(f['repaid'], meta)}). "
                    f"Класс «сиблинг»: 31.07 ждали 0x6cf59693, пришёл 0x2bfc428f. "
                    f"Профиль: python3 -m analysis.midnight_rivals")
                 log(f"АЛЕРТ: новый ликвидатор {c} блок {f['block']} units={f['repaid']}")
@@ -576,20 +675,32 @@ def main() -> int:
             # через 18 минут после окна — по такому сигналу человек не делает НИЧЕГО.
             # Теперь порог общий и равен нашему полу огня: чужое взятие ниже пола мы бы не
             # взяли при любом раскладе ⇒ лог. Выше пола — это упущенные деньги ⇒ TG.
-            if f["repaid"] < FOREIGN_MIN_UNITS:
+            # 07.08: порог берётся в единицах ЗАЙМА ЭТОГО РЫНКА. Прежний общий порог в
+            # units был верен ровно для 6-значных займов; на пяти WETH-рынках радара он не
+            # отсекал ничего (см. шапку market_meta).
+            floor = meta.get("floor_units", FOREIGN_MIN_UNITS)
+            if f["repaid"] < floor:
                 # post= сохраняем ИМЕННО здесь: пост-maturity взятие — самый ценный след для
                 # форензики (кто знает календарь), и он теперь виден только в логе.
-                log(f"чужой ликвидатор {f['caller']} ниже пола огня: {f['repaid']} units "
-                    f"(< {FOREIGN_MIN_UNITS}) post={f['post']} рынок {f['market'][:14]}… "
+                log(f"чужой ликвидатор {f['caller']} ниже пола огня: "
+                    f"{fmt_loan(f['repaid'], meta)} (< {fmt_loan(floor, meta)}) "
+                    f"post={f['post']} рынок {f['market'][:14]}… "
                     f"блок {f['block']} — в лог, без алерта")
                 continue
             kind = "пост-maturity " if f["post"] else ""
-            tg(f"🏁 [midnight] ДЕНЬГИ ПРОШЛИ МИМО: {f['caller']} взял {kind}позицию "
-               f"~${f['repaid'] / 1e6:,.0f} (если займ USDC) на {f['market'][:14]}… "
-               f"(блок {f['block']}, {when}). Это ВЫШЕ нашего пола ${FOREIGN_MIN_UNITS / 1e6:,.0f} "
-               f"— мы могли её взять и не взяли.")
+            # УПУЩЕННЫЙ ПРИЗ — то, ради чего этот алерт вообще существует: репей говорит,
+            # СКОЛЬКО конкурент вложил, а не сколько заработал. Приз = стоимость сейзнутого
+            # по оракулу − репей; помечен как оценка, потому что цена выхода ниже оракульной.
+            prize = missed_prize(f, meta)
+            prize_txt = (f" Приз ≈{prize} (оценка по оракулу, не цена выхода)."
+                         if prize else " Приз посчитать не удалось (нет цены оракула).")
+            tg(f"🏁 [midnight] ДЕНЬГИ ПРОШЛИ МИМО: {f['caller']} взял {kind}позицию, "
+               f"репей {fmt_loan(f['repaid'], meta)} на {f['market'][:14]}… "
+               f"(блок {f['block']}, {when}).{prize_txt} "
+               f"Это ВЫШЕ нашего пола {fmt_loan(floor, meta)} — мы могли её взять и не взяли.")
             log(f"АЛЕРТ: чужой ликвидатор {f['caller']} блок {f['block']} "
-                f"units={f['repaid']} post={f['post']}")
+                f"репей={f['repaid']} seized={f.get('seized')} приз={prize} "
+                f"post={f['post']} рынок={f['market'][:14]}")
     except Exception as e:  # noqa: BLE001 — скан логов НИКОГДА не валит радар
         log(f"скан чужих ликвидаций не удался (не критично): {e}")
     # Защёлка знакомых адресов пишется ОТДЕЛЬНО и ПОСЛЕ скана: основной стейт сохраняется
