@@ -94,6 +94,24 @@ def _append(path: str, recs: list[dict]) -> None:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 
+def _ident(r: dict) -> tuple:
+    return (r.get("ts"), r.get("source"), r.get("key"), r.get("text"))
+
+
+def _rewrite_merged(drop: list[dict], patch: list[dict] | None = None) -> None:
+    """Переписать инбокс от СВЕЖЕГО чтения, а не от снапшота main(): drop — закрытые
+    записи (убрать), patch — записи с обновлёнными полями (attempts). Сессия разбора идёт
+    минуты-десятки минут, и notify() за это время дописывает в инбокс новые тревоги —
+    перезапись стейл-снапшотом их молча теряла (07.08: тревога midnight легла в инбокс
+    через 5 минут после подъёма сессии и была бы стёрта на её выходе). Потерянная тревога =
+    класс «мёртвый сторож»: молчание неотличимо от спокойствия."""
+    dropset = {_ident(r) for r in drop}
+    patches = {_ident(r): r for r in (patch or [])}
+    fresh = _read(INBOX)
+    out = [patches.get(_ident(r), r) for r in fresh if _ident(r) not in dropset]
+    _rewrite(INBOX, out)
+
+
 def main() -> int:
     if os.environ.get("FLEET_WAKE") == "0":
         return 0
@@ -115,9 +133,9 @@ def main() -> int:
         _append(HANDLED, dead)
         pending = [r for r in pending if r.get("attempts", 0) < MAX_ATTEMPTS]
         # только НЕразобранные: иначе инбокс растёт вечно закрытыми записями, а архив
-        # закрытых — отдельный файл (agent-inbox.handled.jsonl)
-        recs = [r for r in recs if not r.get("handled")]
-        _rewrite(INBOX, recs)
+        # закрытых — отдельный файл (agent-inbox.handled.jsonl). Merged: notify() в HIL-ветке
+        # выше — сетевой вызов, за него в инбокс могли лечь новые записи.
+        _rewrite_merged(dead)
         if not pending:
             return 0
 
@@ -135,7 +153,7 @@ def main() -> int:
     # счётчик ДО запуска: жёсткое падение сессии не должно зациклить элемент
     for r in batch:
         r["attempts"] = r.get("attempts", 0) + 1
-    _rewrite(INBOX, recs)
+    _rewrite_merged([], patch=batch)
     open(STAMP, "w").write(str(int(time.time())))
 
     prompt = PROMPT_HEAD + "\n".join(
@@ -165,7 +183,8 @@ def main() -> int:
             r["handled"] = True
             r["outcome"] = "agent"
         _append(HANDLED, batch)
-        _rewrite(INBOX, [r for r in recs if not r.get("handled")])
+        # merged, не снапшот: пока сессия шла (до 30 мин), инбокс мог пополниться
+        _rewrite_merged(batch)
     return 0
 
 
