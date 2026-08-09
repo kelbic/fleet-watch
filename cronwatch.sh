@@ -75,6 +75,7 @@ REGISTRY=(
   "usde-hbcheck|liquidator/state/usde_hbcheck.sh|600"
   "cascade-facts|liquidator/state/cascade_facts_cron.sh|600"
   "shadow-watch-katana|katana-probe/shadow_watch.py|900"
+  "route-canary|fleet-watch/route-canary.sh|21600"
   "exec-wc|wc-executor.lock|60"
   "exec-katana|katana-executor.lock|60"
   "exec-hyperlend|hyperlend-executor.lock|60"
