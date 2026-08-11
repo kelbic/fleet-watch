@@ -42,6 +42,53 @@ MAX_ATTEMPTS = int(os.environ.get("FLEET_WAKE_ATTEMPTS", "3"))
 MAX_ITEMS = int(os.environ.get("FLEET_WAKE_MAX_ITEMS", "25"))
 SESSION_TIMEOUT = int(os.environ.get("FLEET_WAKE_TIMEOUT", "1800"))
 
+# Модель сессии разбора ПРИБИТА здесь, а не берётся из интерактивного дефолта
+# ~/.claude/settings.json. 10.08 дефолт стоял на модели с выбранной квотой, и 29 часов подряд
+# подъём падал за 5 секунд одной строкой «You've reached your … limit»: сторожа исправно писали,
+# разбора не было ни разу, три тревоги закрылись как «escalated-to-human», не будучи прочитанными.
+# Цепочка, а не одно имя: квота — величина ПЕР-МОДЕЛЬНАЯ, запасная нужна ровно на этот случай.
+WAKE_MODELS = [m.strip() for m in
+               os.environ.get("FLEET_WAKE_MODELS", "opus,sonnet").split(",") if m.strip()] or ["opus"]
+
+# Подписи «сессия НЕ ЗАПУСТИЛАСЬ» — это не провал разбора, а его ОТСУТСТВИЕ, и попытку тратить
+# на него нельзя (иначе очередь молча стекает человеку без единого прохода по цепи). Класс отказа
+# идёт в ключ дедупа: смена причины (квота→доступ) обязана позвонить заново — отпечаток с сигнала.
+_START_FAILURES = (
+    ("quota", ("reached your", "usage-credits", "credit balance", "usage limit")),
+    ("auth", ("invalid api key", "please run /login", "not logged in",
+              "unauthorized", "authentication_error")),
+)
+START_FAIL_MAXLEN = 500
+
+
+def _start_failure(rc: int, out: str) -> str | None:
+    """Класс отказа, если сессия не запускалась вовсе, иначе None.
+
+    Требуем И ненулевой код, И короткий вывод: длинный вывод при rc≠0 — это сессия, которая
+    работала и упала (её попытка сгорает честно), а не отказ старта; своё же слово «limit»
+    внутри полноценного разбора не должно читаться как отказ. Умолчание консервативное:
+    неопознанный отказ считаем работой — вечный цикл хуже одной лишней потраченной попытки.
+    """
+    if rc == 0 or len(out) > START_FAIL_MAXLEN:
+        return None
+    low = out.lower()
+    for cls, needles in _START_FAILURES:
+        if any(n in low for n in needles):
+            return cls
+    return None
+
+
+def _run_session(prompt: str, model: str) -> tuple[int, str]:
+    cmd = [CLAUDE, "-p"] + (["--model", model] if model else []) + [prompt]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=SESSION_TIMEOUT, cwd=os.path.expanduser("~"))
+        return p.returncode, (p.stdout or "") + (p.stderr or "")
+    except subprocess.TimeoutExpired:
+        return 124, f"таймаут {SESSION_TIMEOUT}s"
+    except Exception as e:  # noqa: BLE001
+        return 1, f"запуск упал: {e}"
+
 PROMPT_HEAD = """Ты разбираешь накопившиеся тревоги флота ликвидаторов (проснулся по крону,
 человек НЕ ждёт у экрана). Тревоги ниже пришли из сторожей и НЕ эскалировались владельцу —
 предполагается, что ты разберёшься сам.
@@ -139,9 +186,11 @@ def main() -> int:
     # 1) выдохшиеся попытки -> человеку (пункт 3 критерия HIL: сломана автоматика)
     dead = [r for r in pending if r.get("attempts", 0) >= MAX_ATTEMPTS]
     if dead:
+        why = (dead[0].get("last_error") or "").strip()
         notify(f"🛠 [fleet] АВТОРАЗБОР НЕ РАБОТАЕТ: {len(dead)} тревог не разобраны за "
                f"{MAX_ATTEMPTS} попыток — сторожа пишут, агент не поднимается. "
-               f"Первая: {dead[0].get('source')}: {dead[0].get('text', '')[:160]}",
+               f"Первая: {dead[0].get('source')}: {dead[0].get('text', '')[:160]}"
+               + (f"\nПоследняя ошибка сессии: {why[:200]}" if why else ""),
                source="agent-wake", hil=True, key="wake-broken", dedup_sec=6 * 3600)
         for r in dead:
             r["handled"] = True
@@ -170,7 +219,8 @@ def main() -> int:
     for r in batch:
         r["attempts"] = r.get("attempts", 0) + 1
     _rewrite_merged([], patch=batch)
-    open(STAMP, "w").write(str(int(time.time())))
+    with open(STAMP, "w") as f:
+        f.write(str(int(time.time())))
 
     prompt = PROMPT_HEAD + "\n".join(
         f"  [{r['iso']}] {r['source']}: {r['text']}" for r in batch)
@@ -178,21 +228,43 @@ def main() -> int:
         prompt += f"\n\n(ещё {len(pending) - len(batch)} тревог в очереди — разберёшь следующим подъёмом)"
 
     _log(f"agent-wake: поднимаю сессию на {len(batch)} тревог")
-    t0 = time.time()
-    try:
-        p = subprocess.run([CLAUDE, "-p", prompt], capture_output=True, text=True,
-                           timeout=SESSION_TIMEOUT, cwd=os.path.expanduser("~"))
-        rc, out = p.returncode, (p.stdout or "") + (p.stderr or "")
-    except subprocess.TimeoutExpired:
-        rc, out = 124, f"таймаут {SESSION_TIMEOUT}s"
-    except Exception as e:  # noqa: BLE001
-        rc, out = 1, f"запуск упал: {e}"
+    rc, out, blocked, model = 1, "", None, ""
+    for model in WAKE_MODELS:
+        t0 = time.time()
+        rc, out = _run_session(prompt, model)
+        blocked = _start_failure(rc, out)
+        with open(SESSION_LOG, "a") as f:
+            f.write(f"\n===== {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} "
+                    f"тревог={len(batch)} model={model} rc={rc} {time.time() - t0:.0f}s"
+                    f"{' НЕ-СТАРТ:' + blocked if blocked else ''} =====\n{out}\n")
+        _log(f"agent-wake: сессия model={model} rc={rc} за {time.time() - t0:.0f}s, "
+             f"вывод {len(out)} симв. -> {SESSION_LOG}")
+        if not blocked:
+            break
+        _log(f"agent-wake: модель {model} не поднялась ({blocked}), беру следующую")
 
-    with open(SESSION_LOG, "a") as f:
-        f.write(f"\n===== {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} "
-                f"тревог={len(batch)} rc={rc} {time.time() - t0:.0f}s =====\n{out}\n")
-    _log(f"agent-wake: сессия rc={rc} за {time.time() - t0:.0f}s, "
-         f"вывод {len(out)} симв. -> {SESSION_LOG}")
+    # причину кладём НА ЗАПИСЬ: тревога об исчерпании попыток обязана нести «почему», а не
+    # отсылать к третьему файлу (10-11.08 она дважды позвонила человеку словами «агент не
+    # поднимается», пока «You've reached your … limit» лежало в agent-wake-sessions.log)
+    if rc != 0:
+        for r in batch:
+            r["last_error"] = out.strip()[-200:]
+        _rewrite_merged([], patch=batch)
+
+    if blocked:
+        # НИ ОДНА модель не поднялась ⇒ разбора не было. Попытку возвращаем: иначе незнание
+        # («мы даже не смотрели») засчитывается как работа и за MAX_ATTEMPTS циклов закрывает
+        # живые тревоги. Человека зовём на САМ отказ инфраструктуры — это пункт 3 критерия HIL,
+        # и тревоги при этом остаются в очереди, а не закрываются непрочитанными.
+        for r in batch:
+            r["attempts"] = max(0, r.get("attempts", 1) - 1)
+        _rewrite_merged([], patch=batch)
+        notify(f"🛠 [fleet] РАЗБОР НЕ ЗАПУСКАЕТСЯ ({blocked}): не поднялась ни одна модель "
+               f"({'/'.join(WAKE_MODELS)}), {len(pending)} тревог ждут в очереди — попытки НЕ "
+               f"тратятся, разбор пойдёт сам, как только причина уйдёт.\nПричина: "
+               f"{out.strip()[:200]}",
+               source="agent-wake", hil=True, key=f"wake-blocked:{blocked}", dedup_sec=6 * 3600)
+        return 0
 
     if rc == 0:
         for r in batch:
