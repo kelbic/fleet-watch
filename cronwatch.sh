@@ -76,6 +76,12 @@ REGISTRY=(
   "cascade-facts|liquidator/state/cascade_facts_cron.sh|600"
   "shadow-watch-katana|katana-probe/shadow_watch.py|900"
   "route-canary|fleet-watch/route-canary.sh|21600"
+  # 12.08: будильник разбора тревог 29 часов не поднимался (квота модели), и НАДЗОРА ЗА НИМ
+  # НЕ БЫЛО — реестр покрывал сторожей, но не того, кто читает их тревоги. Он молчит в лог
+  # при пустой очереди by design (agent-wake.py: `if not pending: return 0`), поэтому «жив»
+  # и «не вызывается cron'ом» на диске неразличимы — ровно случай, ради которого этот скрипт
+  # и берёт ВНЕШНЮЮ истину из journalctl.
+  "agent-wake|fleet-watch/agent-wake.py|1200"
   "exec-wc|wc-executor.lock|60"
   "exec-katana|katana-executor.lock|60"
   "exec-hyperlend|hyperlend-executor.lock|60"
