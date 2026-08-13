@@ -175,5 +175,54 @@ class TestEscalationCarriesTheCause(WakeBase):
         self.assertIn("ПОСЛЕДНЯЯ СТРОКА ОШИБКИ", self.inbox_recs()[0]["last_error"])
 
 
+class TestArchiveKeepsWhatTheSessionWrote(WakeBase):
+    """Разбор пишет вывод В САМУ ЗАПИСЬ (поле resolution) — архив обязан его донести.
+
+    Дефект 13.08: `_append(HANDLED, batch)` архивировал снапшот, снятый ДО подъёма сессии,
+    и вывод разбора терялся; в архиве оставалось «outcome: agent» без единого слова о том,
+    что выяснено. Симптома не было, потому что архив читают глазами, а не кодом.
+    """
+
+    def _session_that_writes_resolution(self, text: str):
+        def fake(prompt: str, model: str):
+            self.runs.append(model)
+            recs = aw._read(self.inbox)          # сессия читает СВОЮ тревогу...
+            for r in recs:
+                r["resolution"] = text           # ...и дописывает в неё вывод
+            aw._rewrite(self.inbox, recs)
+            return 0, "разобрал"
+        aw._run_session = fake
+
+    def test_resolution_survives_into_the_archive(self):
+        self.seed()
+        self._session_that_writes_resolution("факт по цепи: долг $0.0238, действий не требуется")
+        aw.main()
+        done = self.handled_recs()
+        self.assertEqual(len(done), 1)
+        self.assertEqual(done[0]["outcome"], "agent")
+        self.assertIn("$0.0238", done[0].get("resolution", ""),
+                      "вывод разбора обязан доехать до архива, а не остаться в стёртом инбоксе")
+        self.assertEqual(self.inbox_recs(), [], "и запись всё равно уходит из очереди")
+
+    def test_alert_arriving_mid_session_is_not_archived_by_mistake(self):
+        """Свежее чтение не должно утащить в архив ЧУЖУЮ тревогу, легшую во время разбора."""
+        self.seed()
+
+        def fake(prompt: str, model: str):
+            self.runs.append(model)
+            recs = aw._read(self.inbox)
+            recs.append({"ts": 1786602012, "source": "midnight-monitor", "key": "",
+                         "text": "новая тревога посреди разбора", "attempts": 0,
+                         "handled": False})
+            aw._rewrite(self.inbox, recs)
+            return 0, "ок"
+        aw._run_session = fake
+        aw.main()
+        self.assertEqual(len(self.handled_recs()), 1, "в архив едет только разобранная")
+        pend = self.inbox_recs()
+        self.assertEqual(len(pend), 1, "новая тревога остаётся в очереди")
+        self.assertEqual(pend[0]["source"], "midnight-monitor")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
