@@ -279,7 +279,10 @@ for e in "${REGISTRY[@]}"; do
   last=$(printf '%s\n' "$SNAP" | grep -F "$pat" 2>/dev/null | tail -1 | cut -d. -f1)
   case "$last" in (''|*[!0-9]*) last="" ;; esac
   limit=$(( cad * 2 + GRACE ))
-  first=$(grep -F "$name|" "$SEEN" 2>/dev/null | tail -1 | cut -d'|' -f2)
+  # ЯКОРЬ ^: grep -F совпадает где угодно в строке, и имя-суффикс чужого имени читало бы
+  # ЧУЖУЮ первую встречу. Сегодня в реестре коллизий нет — но молчаливо неверный возраст
+  # у одного сторожа не даёт симптома, а именно им гард и решает, звонить ли.
+  first=$(grep "^$name|" "$SEEN" 2>/dev/null | tail -1 | cut -d'|' -f2)
   case "$first" in (''|*[!0-9]*) first="" ;; esac
   if [ -z "$first" ]; then
     printf '%s|%s\n' "$name" "$now" >> "$SEEN" 2>/dev/null || true
