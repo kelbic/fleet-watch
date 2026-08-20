@@ -31,7 +31,22 @@ _spec = importlib.util.spec_from_file_location(   # AW_PATH — для отри�
 aw = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(aw)
 
-QUOTA = "You've reached your Fable 5 limit. Run /usage-credits to continue or switch models with /model."
+# ЭТАЛОН, а не сочинение: строки сняты дословно из agent-wake-sessions.log — все КОРОТКИЕ
+# выводы несостоявшихся сессий за всю историю файла. 17-19.08 суита была зелёной, пока бой
+# был слеп: фикстура QUOTA была списана с того же написания, что и список подстрок в продукте,
+# — тест и код делили одно допущение. Поэтому основная фикстура теперь та, на которой продукт
+# СЛОМАЛСЯ, а прежняя оставлена рядом как исторический вариант.
+QUOTA = "You've hit your weekly limit · resets Aug 19, 5pm (UTC)"
+QUOTA_LEGACY = "You've reached your Fable 5 limit. Run /usage-credits to continue or switch models with /model."
+QUOTA_CORPUS = (
+    QUOTA_LEGACY,
+    "You've hit your weekly limit · resets Aug 19, 5pm (UTC)",
+    "You've hit your weekly limit · resets Aug 19, 5pm (UTC)\nClient.listTools() called but"
+    " server does not advertise tools capability - returning empty list",
+    "You've hit your weekly limit · resets 5pm (UTC)",
+    "You've hit your weekly limit · resets 5pm (UTC)\nClient.listTools() called but server"
+    " does not advertise tools capability - returning empty list",
+)
 
 
 class WakeBase(unittest.TestCase):
@@ -89,7 +104,25 @@ class TestStartFailureDoesNotBurnAttempts(WakeBase):
         a = self.alerts[0]
         self.assertTrue(a["hil"], "отказ самой автоматики — пункт 3 критерия HIL")
         self.assertEqual(a["key"], "wake-blocked:quota", "класс причины — в ключе дедупа")
-        self.assertIn("reached your", a["text"], "тревога обязана нести ПРИЧИНУ, а не отсылку")
+        self.assertIn(QUOTA[:40], a["text"], "тревога обязана нести ПРИЧИНУ, а не отсылку")
+
+    def test_every_refusal_observed_in_the_log_is_recognised(self):
+        """Позитивный контроль по эталону: КАЖДОЕ написание, которое бой реально видел.
+
+        Сюда дописывать новые строки из agent-wake-sessions.log, а не подгонять их под regexp.
+        """
+        for txt in QUOTA_CORPUS:
+            self.assertEqual(aw._start_failure(1, txt), "quota", f"не опознано: {txt[:60]!r}")
+
+    def test_session_report_mentioning_a_limit_is_not_a_quota(self):
+        """Ложная «квота» опаснее промаха: она ВОЗВРАЩАЕТ попытку, и настоящий отказ
+        крутился бы вечно, ни разу не дойдя до человека. Якорь you/your обязателен."""
+        for txt in ("I checked the rate limit config and reset the counter",
+                    "raised the limit, will reset tomorrow",
+                    "boom"):
+            self.assertIsNone(aw._start_failure(1, txt), f"ложное срабатывание на {txt!r}")
+        self.assertIsNone(aw._start_failure(1, "таймаут 1800s"),
+                          "таймаут — сессия РАБОТАЛА и была убита, попытка обязана сгореть")
 
     def test_auth_failure_is_a_separate_dedup_key(self):
         self.seed()

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -53,10 +54,31 @@ WAKE_MODELS = [m.strip() for m in
 # Подписи «сессия НЕ ЗАПУСТИЛАСЬ» — это не провал разбора, а его ОТСУТСТВИЕ, и попытку тратить
 # на него нельзя (иначе очередь молча стекает человеку без единого прохода по цепи). Класс отказа
 # идёт в ключ дедупа: смена причины (квота→доступ) обязана позвонить заново — отпечаток с сигнала.
+# Класс отказа опознаём ПО ФОРМЕ сообщения, а не по списку написаний. 17-19.08 список из
+# четырёх подстрок («reached your», «usage limit», …) прошёл мимо живого текста
+# «You've hit your weekly limit · resets Aug 19, 5pm (UTC)»: вендор сменил и глагол, и
+# прилагательное. Цена промаха не «не опознали причину», а ОТМЕНА ЗАПАСНОЙ МОДЕЛИ: ветка
+# `if not blocked: break` вышла из цепочки после первой же модели, sonnet не пробовался НИ
+# РАЗУ за шесть подъёмов, попытки сгорели, и владельцу дважды ушло ночное «агент не
+# поднимается» без причины — при живой квоте на второй модели.
+# Суита при этом была зелёной: её фикстура QUOTA списана с того же написания, что и список
+# подстрок, — тест и продукт делили одно допущение и вместе не видели боя. Поэтому фикстуры
+# теперь берутся из agent-wake-sessions.log (эталон), а совпадение ищется по форме:
+# глагол исчерпания рядом с мерой, либо оговорка про сброс — у работающей сессии их не бывает.
 _START_FAILURES = (
-    ("quota", ("reached your", "usage-credits", "credit balance", "usage limit")),
-    ("auth", ("invalid api key", "please run /login", "not logged in",
-              "unauthorized", "authentication_error")),
+    ("quota", (
+        # якорь на «you/your» обязателен: без него короткий отчёт самой сессии
+        # («rate limit config … reset the counter») читался как квота, а ложная квота
+        # ВОЗВРАЩАЕТ попытку — то есть настоящий отказ крутился бы, не эскалируясь.
+        re.compile(r"\byou\b[^.\n]{0,30}\b(hit|reached|exceeded|out of|ran out of)\b"
+                   r"[^.\n]{0,40}\b(limit|quota|credits?)\b"),
+        re.compile(r"\byour\b[^.\n]{0,30}\b(limit|quota)\b[^.\n]{0,60}\bresets?\b"),
+        re.compile(r"usage-credits|credit balance"),      # исторические написания
+    )),
+    ("auth", (
+        re.compile(r"invalid api key|please run /login|not logged in|"
+                   r"unauthorized|authentication_error"),
+    )),
 )
 START_FAIL_MAXLEN = 500
 
@@ -72,8 +94,8 @@ def _start_failure(rc: int, out: str) -> str | None:
     if rc == 0 or len(out) > START_FAIL_MAXLEN:
         return None
     low = out.lower()
-    for cls, needles in _START_FAILURES:
-        if any(n in low for n in needles):
+    for cls, pats in _START_FAILURES:
+        if any(p.search(low) for p in pats):
             return cls
     return None
 
