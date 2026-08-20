@@ -54,6 +54,7 @@ DIR=${CW_DIR:-/home/claude-agent/.fleet-watch}
 LOG=${CW_LOG:-$DIR/cronwatch.log}
 STATE=${CW_STATE:-$DIR/cronwatch.state}
 STAMP=${CW_STAMP:-$DIR/.cronwatch_alerted}
+SEEN=${CW_SEEN:-$DIR/cronwatch.seen}   # реестр ПЕРВЫХ ВСТРЕЧ задач (см. гард ниже)
 THROTTLE=3600
 WINDOW="-12h"          # ПЕРЕСЧИТЫВАЕТСЯ ниже из реестра — правьте там, не здесь
 GRACE=120
@@ -76,6 +77,7 @@ REGISTRY=(
   "cascade-facts|liquidator/state/cascade_facts_cron.sh|600"
   "shadow-watch-katana|katana-probe/shadow_watch.py|900"
   "route-canary|fleet-watch/route-canary.sh|21600"
+  "cu-quota|fleet-watch/cu-quota.sh|3600"
   # 12.08: будильник разбора тревог 29 часов не поднимался (квота модели), и НАДЗОРА ЗА НИМ
   # НЕ БЫЛО — реестр покрывал сторожей, но не того, кто читает их тревоги. Он молчит в лог
   # при пустой очереди by design (agent-wake.py: `if not pending: return 0`), поэтому «жив»
@@ -118,8 +120,12 @@ tg() {  # $1=текст. МЬЮТ НА ТРАНСПОРТЕ: при CW_MUTE=1 cu
   fi
   # АДРЕСАТ — АГЕНТ (03.08): упавший крон агент чинит сам. Провал доставки обязан
   # оставить след в логе — молча не дошедшая тревога есть тот же мёртвый сторож.
+  # КЛЮЧ ДЕДУПА — АРГУМЕНТОМ ($2, дефолт "cronwatch"). До 20.08 ключ был один на всё, и
+  # восстановительное ✅ гасилось дедупом СВОЕЙ ЖЕ тревоги 💀 (17:15 20.08: "dedup" в
+  # notify.log, инбокс сообщения не увидел). Отбой обязан доходить: без него разбирающий
+  # не отличает «починилось само» от «сторож замолчал».
   local resp
-  resp=$(/home/claude-agent/.fleet-watch/notify.sh cronwatch 0 "$1" 3600 cronwatch 2>&1)
+  resp=$(/home/claude-agent/.fleet-watch/notify.sh cronwatch 0 "$1" 3600 "${2:-cronwatch}" 2>&1)
   case "$resp" in
     inbox|tg|dedup|muted) return 0 ;;
     *) echo "[notify НЕ ПРИНЯЛ] ${resp:0:200}" >> "$LOG"; return 1 ;;
@@ -180,8 +186,31 @@ if [ "${1:-}" = "selftest" ]; then
   # 2) throttled не должна падать при недоступном stat
   t "throttled краш-безопасна без stat"         0 env PATH="$empty" CW_MUTE=1 /bin/bash -c \
       "STAMP=$SSTAMP; now=$now; THROTTLE=3600; $(declare -f throttled); throttled; true"
-  # 3) боевые артефакты обязаны остаться нетронутыми
+  # 3) ГАРД ПЕРВОЙ ВСТРЕЧИ (регрессия ложного 💀 20.08 17:00).
+  # Фикстура — НАСТОЯЩИЙ журнал без строк одной задачи: мир, где она не запускалась ни разу.
+  prod_seen=$(cat "$DIR/cronwatch.seen" 2>/dev/null)
+  fix=$sand/snap
+  journalctl -u cron --since "-13h" --no-pager -o short-unix 2>/dev/null \
+    | grep 'CMD (' 2>/dev/null | grep -v 'fleet-watch/cu-quota.sh' > "$fix" 2>/dev/null
+  fixlines=$(grep -c 'CMD (' "$fix" 2>/dev/null); case "$fixlines" in (''|*[!0-9]*) fixlines=0 ;; esac
+  if [ "$fixlines" -lt "$MIN_CMD_LINES" ]; then
+    echo "  ПРОПУСК гарда первой встречи: журнал дал $fixlines строк (<$MIN_CMD_LINES) — фикстуру не построить"
+  else
+    gprobe() { env CW_MUTE=1 CW_DIR="$sand" CW_LOG="$SLOG" CW_STATE="$SSTATE" \
+                   CW_STAMP="$SSTAMP" CW_SEEN="$1" CW_SNAP_FILE="$fix" "$0"; }
+    # (а) задача ТОЛЬКО ЧТО в реестре -> пустота в журнале НЕ является смертью -> код 0
+    printf 'cu-quota|%s\n' "$now" > "$sand/seen_new"
+    rm -f "$SSTAMP"
+    t "новая задача без запусков — НЕ тревога"   0 gprobe "$sand/seen_new"
+    # (б) та же пустота у задачи, известной сутки -> это смерть -> код 2
+    printf 'cu-quota|%s\n' "$(( now - 86400 ))" > "$sand/seen_old"
+    rm -f "$SSTAMP"
+    t "старая задача без запусков — ТРЕВОГА"     2 gprobe "$sand/seen_old"
+  fi
+
+  # 4) боевые артефакты обязаны остаться нетронутыми
   t "боевой state не тронут тестом"             0 test "$(cat "$DIR/cronwatch.state" 2>/dev/null)" = "$prod_state"
+  t "боевой реестр встреч не тронут тестом"     0 test "$(cat "$DIR/cronwatch.seen" 2>/dev/null)" = "$prod_seen"
   rm -rf "$sand"; rmdir "$empty" 2>/dev/null
   echo "провалов: $fails"
   VERIFIED=1; ALARMED=1
@@ -193,7 +222,15 @@ fi
 [ "${1:-}" = "_blindprobe" ] && WINDOW="-12h"
 
 # ── ИСТОЧНИК ИСТИНЫ ─────────────────────────────────────────────────────────────
-SNAP=$(journalctl -u cron --since "$WINDOW" --no-pager -o short-unix 2>/dev/null | grep 'CMD (' 2>/dev/null)
+# CW_SNAP_FILE — ТОЛЬКО для регрессии решающей логики (selftest). Подменяется ИСТОЧНИК
+# ДАННЫХ, а не решение: дальше идёт тот же самый код, что и в бою. Фикстура строится из
+# НАСТОЯЩЕГО журнала вычёркиванием строк одной задачи (мир «задача не запускалась»), а не
+# пишется под ожидаемый ответ — списанная с продукта фикстура зелена ровно там, где бой слеп.
+if [ -n "${CW_SNAP_FILE:-}" ] && [ -f "${CW_SNAP_FILE:-}" ]; then
+  SNAP=$(cat "$CW_SNAP_FILE")
+else
+  SNAP=$(journalctl -u cron --since "$WINDOW" --no-pager -o short-unix 2>/dev/null | grep 'CMD (' 2>/dev/null)
+fi
 lines=$(printf '%s\n' "$SNAP" | grep -c 'CMD (' 2>/dev/null)
 case "$lines" in (''|*[!0-9]*) lines=0 ;; esac
 
@@ -213,18 +250,50 @@ oldest=$(printf '%s\n' "$SNAP" | head -1 | cut -d. -f1)
 case "$oldest" in (''|*[!0-9]*) oldest=$now ;; esac
 span=$(( now - oldest ))
 
+# ПЕРВАЯ ВСТРЕЧА ЗАДАЧИ (20.08). «В журнале нет запусков» доказывает смерть только у задачи,
+# которая ОБЯЗАНА была запускаться всё это время. У ТОЛЬКО ЧТО ЗАВЕДЁННОЙ пустота в журнале —
+# нормальное состояние, и 20.08 17:00 это дало ложное 💀: cu-quota добавили в crontab и в
+# реестр в 16:59, первый запуск стоял на :07, а глубина журнала (13ч) уже перекрывала порог
+# задачи (7320с) — гард «span<limit» такую задачу не спасает по построению.
+# Поэтому вторая координата: КОГДА задача впервые появилась в реестре. Файл дописывается
+# только новыми именами; отсутствие/непрочитанность файла = задача считается новой (fail-safe
+# в сторону молчания у ОДНОЙ задачи, а не ложной тревоги по всему флоту).
+# ПЕРВИЧНОЕ ЗАПОЛНЕНИЕ. Если файла ещё нет, все задачи, УЖЕ стоящие в реестре, засеваются
+# возрастом «$now - $span» (насколько хватает журнала), а НЕ текущим моментом. Иначе введение
+# самого гарда ослепило бы надзор на один порог по КАЖДОЙ задаче разом — у route-canary это
+# 12 часов молчания о реально умершем стороже. Гард обязан защищать только имена, появившиеся
+# ПОСЛЕ него; для всех сегодняшних задач семантика остаётся ровно прежней.
+if [ ! -f "$SEEN" ]; then
+  : > "$SEEN" 2>/dev/null || true
+  _seed=$(( now - span ))
+  for e in "${REGISTRY[@]}"; do
+    printf '%s|%s\n' "${e%%|*}" "$_seed" >> "$SEEN" 2>/dev/null || true
+  done
+  log "реестр первых встреч создан: ${#REGISTRY[@]} задач засеяны возрастом ${span}с (глубина журнала)"
+fi
+touch "$SEEN" 2>/dev/null || true
+
 bad=""; report=""; unproven=""
 for e in "${REGISTRY[@]}"; do
   name=${e%%|*}; rest=${e#*|}; pat=${rest%%|*}; cad=${rest##*|}
   last=$(printf '%s\n' "$SNAP" | grep -F "$pat" 2>/dev/null | tail -1 | cut -d. -f1)
   case "$last" in (''|*[!0-9]*) last="" ;; esac
   limit=$(( cad * 2 + GRACE ))
+  first=$(grep -F "$name|" "$SEEN" 2>/dev/null | tail -1 | cut -d'|' -f2)
+  case "$first" in (''|*[!0-9]*) first="" ;; esac
+  if [ -z "$first" ]; then
+    printf '%s|%s\n' "$name" "$now" >> "$SEEN" 2>/dev/null || true
+    first=$now
+  fi
+  known=$(( now - first ))
   if [ -z "$last" ]; then
     age=-1
     if [ "$span" -lt "$limit" ]; then
-      unproven="$unproven $name(${span}с<${limit}с)"
+      unproven="$unproven $name(журнал ${span}с<${limit}с)"
+    elif [ "$known" -lt "$limit" ]; then
+      unproven="$unproven $name(НОВАЯ, в реестре ${known}с<${limit}с)"
     else
-      bad="$bad\n  🔴 $name — НЕ ЗАПУСКАЛСЯ за ${WINDOW#-} (каденция ${cad}с)"
+      bad="$bad\n  🔴 $name — НИ ОДНОГО запуска за ${span}с журнала (каденция ${cad}с, в реестре ${known}с)"
     fi
   else
     age=$(( now - last ))
@@ -249,6 +318,6 @@ printf '{"ts":%s,"verified":true,"checked":%s,"bad":false}\n' "$now" "${#REGISTR
 VERIFIED=1
 if [ -f "$STAMP" ]; then
   rm -f "$STAMP"
-  tg "✅ [cronwatch] все ${#REGISTRY[@]} задач снова тикают в срок."
+  tg "✅ [cronwatch] все ${#REGISTRY[@]} задач снова тикают в срок." "cronwatch:ok"
 fi
 exit 0

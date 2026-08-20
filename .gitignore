@@ -16,3 +16,5 @@ notify-dedup.json
 notify.log
 .agent-wake-stamp
 target-watch.py.bak-pre-decimals
+# реестр первых встреч задач cronwatch (20.08) — рантайм, как и *.state
+cronwatch.seen
