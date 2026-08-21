@@ -78,6 +78,7 @@ REGISTRY=(
   "shadow-watch-katana|katana-probe/shadow_watch.py|900"
   "route-canary|fleet-watch/route-canary.sh|21600"
   "cu-quota|fleet-watch/cu-quota.sh|3600"
+  "threads-watch|fleet-watch/threads-watch.sh|300"
   # 12.08: будильник разбора тревог 29 часов не поднимался (квота модели), и НАДЗОРА ЗА НИМ
   # НЕ БЫЛО — реестр покрывал сторожей, но не того, кто читает их тревоги. Он молчит в лог
   # при пустой очереди by design (agent-wake.py: `if not pending: return 0`), поэтому «жив»

@@ -21,6 +21,17 @@
 чужой ликвидатор забрал деньги, бот завис, профиль не переключился. Всё это агент
 разбирает и чинит; человеку там нечего решать, пока дело не упрётся в пункты 1-4.
 
+КОНТРОЛЬ ТРУБЫ ЗАКРЫВАЕТ СЕБЯ САМ (21.08). Сторож threads-watch проверил свою трубу
+живым вызовом notify.sh с обычным ключом: текст честно говорил «тест, игнорировать», но
+запись легла в БОЕВУЮ очередь и через 19 минут подняла сессию разбора — то есть контроль
+оплачен настоящим подъёмом. Тот же класс уже был 20.08 (две тестовые тревоги разбудили
+сессию как настоящие). Поэтому у контроля теперь свой адресат: selftest=True или ключ на
+':selftest' кладёт запись СРАЗУ В АРХИВ разобранного (agent-inbox.handled.jsonl,
+handled=True, outcome=selftest) — след остаётся, труба проверена до самого файла, живая
+очередь и TG не трогаются. Признак ЯВНЫЙ и только от вызывающего: происхождение прогона
+(__main__, env, путь файла) отправителя не доказывает — это перебрано и закрыто 13-14.08.
+Забыть пометку безопасно: получишь настоящую тревогу, а не молчание.
+
 Сторож НА ТРАНСПОРТЕ: FLEET_ALERT_MUTE=1 (или MN_WATCH_MUTE=1 — совместимость с
 target-watch) закрывает канал к человеку И уводит инбокс в файл-дублёр, чтобы тест не
 пачкал боевую очередь. Правило то же, что 19.07: границу держит транспорт, а не
@@ -36,6 +47,10 @@ import urllib.request
 
 WATCH_DIR = os.path.expanduser("~/.fleet-watch")
 INBOX = os.environ.get("FLEET_INBOX", os.path.join(WATCH_DIR, "agent-inbox.jsonl"))
+# Архив РАЗОБРАННОГО (тот же файл, что читает agent-wake). Выводится из INBOX, а не
+# прибивается путём: иначе тест с FLEET_INBOX=<временный> писал бы в боевой архив.
+HANDLED_ARCHIVE = (INBOX[:-len(".jsonl")] if INBOX.endswith(".jsonl") else INBOX) + ".handled.jsonl"
+SELFTEST_SUFFIX = ":selftest"
 DEDUP_STATE = os.path.join(WATCH_DIR, "notify-dedup.json")
 LOG_FILE = os.path.join(WATCH_DIR, "notify.log")
 TG_ENV = os.path.expanduser("~/.claude/channels/telegram/.env")
@@ -128,12 +143,30 @@ def _dedup_hit(key: str, ttl: float) -> bool:
 
 
 def notify(text: str, *, source: str, hil: bool = False, key: str = "",
-           dedup_sec: float = 0.0) -> str:
-    """Единственная точка отправки тревог. Возвращает адресата: tg|inbox|dedup|muted.
+           dedup_sec: float = 0.0, selftest: bool = False) -> str:
+    """Единственная точка отправки тревог. Возвращает адресата: tg|inbox|dedup|muted|selftest.
 
     hil=False (умолчание) — в инбокс агента: он проснётся, разберёт и починит.
     hil=True — человеку в TG; критерий в шапке модуля, четыре случая.
+    selftest=True (или ключ, кончающийся на ':selftest') — КОНТРОЛЬ ТРУБЫ: запись едет
+    сразу в АРХИВ разобранного, минуя живую очередь и TG. Причина — в шапке модуля.
     """
+    if selftest or key.endswith(SELFTEST_SUFFIX):
+        rec = {"ts": int(time.time()),
+               "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "source": source, "hil": hil, "key": key,
+               "text": text if text.startswith(f"[{source}]") else f"[{source}] {text}",
+               "attempts": 0, "handled": True, "outcome": "selftest"}
+        # мьют держит границу и здесь: тестовый прогон не пачкает боевой архив
+        arch = HANDLED_ARCHIVE + (".muted" if muted() else "")
+        try:
+            with open(arch, "a") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError as e:
+            _log(f"notify[{source}]: контроль не записан в архив: {e}")
+        _log(f"notify[{source}] контроль трубы → архив (никого не будит): {text[:120]}")
+        return "selftest"
+
     if _dedup_hit(key, dedup_sec):
         _log(f"notify[{source}] dedup ({key}): {text[:80]}")
         return "dedup"
