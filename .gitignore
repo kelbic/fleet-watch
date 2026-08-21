@@ -18,3 +18,5 @@ notify.log
 target-watch.py.bak-pre-decimals
 # реестр первых встреч задач cronwatch (20.08) — рантайм, как и *.state
 cronwatch.seen
+# счётчик слепых прогонов threads-watch (21.08) — рантайм
+threads-watch.fails
