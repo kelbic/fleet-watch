@@ -211,3 +211,49 @@ def notify(text: str, *, source: str, hil: bool = False, key: str = "",
         except OSError as e:
             _log(f"notify[{source}]: tg-надгробие не записано: {e}")
     return "tg" if ok else "inbox"
+
+
+def resolve(key: str, text: str) -> bool:
+    """Записать ВЫВОД разбора в поле `resolution` своей тревоги в инбоксе.
+
+    Существует потому, что вывод разбора терялся ДВАЖДЫ (20.08 и 22.08) одинаково: сессию
+    убивал таймаут 1800s, agent-wake архивирует запись только на чистом выходе, и в архиве
+    оставалось «outcome: agent» без единого слова о том, что выяснено. Разбор без записанного
+    вывода = разбора не было. Поэтому: писать СРАЗУ, черновиком, ДО долгих проверок, и
+    уточнять по ходу — переживший таймаут черновик полезнее не дожившего до записи финала.
+
+    Переписывает инбокс атомарно (tmp + os.replace) ОТ СВЕЖЕГО ЧТЕНИЯ, а не от снапшота.
+    Названный предел: notify(), дописавший строку в зазор между чтением и заменой, будет
+    потерян — зазор миллисекундный против минут разбора, но он есть. Дописывать патч-строкой
+    нельзя: _rewrite_merged() в agent-wake отображает патч на КАЖДУЮ копию ident'а, и на
+    выходе по таймауту дубль размножил бы тревогу вместо того, чтобы донести вывод.
+    Структурное лечение (sidecar-файл резолюций, append-only) — отдельной правкой, с тестом.
+
+    Возвращает True, если запись с таким key найдена и обновлена.
+    """
+    path = INBOX + (".muted" if muted() else "")
+    try:
+        with open(path) as f:
+            recs = [json.loads(ln) for ln in f if ln.strip()]
+    except (OSError, ValueError) as e:
+        _log(f"resolve[{key}]: инбокс не прочитан: {e}")
+        return False
+    hit = False
+    for r in recs:
+        if r.get("key") == key and not r.get("handled"):
+            r["resolution"] = text
+            hit = True
+    if not hit:
+        _log(f"resolve[{key}]: неразобранной записи с таким ключом нет — вывод НЕ записан")
+        return False
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            for r in recs:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        os.replace(tmp, path)
+    except OSError as e:
+        _log(f"resolve[{key}]: инбокс не записан: {e}")
+        return False
+    _log(f"resolve[{key}]: вывод записан ({len(text)} симв.)")
+    return True
