@@ -66,6 +66,7 @@ REGISTRY=(
   "deadman-katana|katana-bot/deadman.sh|600"
   "deadman-hyperlend|hyperlend-bot/deadman.sh|600"
   "deadman-midnight|midnight-bot/deadman.sh|600"
+  "blind-audit|fleet-watch/blind_audit.sh|86400"
   "netwatch|fleet-watch/netwatch.sh|120"
   "target-watch|fleet-watch/target-watch.py|900"
   "mglo-watch|chainwatch/mglo_watch.py|3600"
