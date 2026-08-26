@@ -20,3 +20,5 @@ target-watch.py.bak-pre-decimals
 cronwatch.seen
 # счётчик слепых прогонов threads-watch (21.08) — рантайм
 threads-watch.fails
+# резервные копии якоря — рантайм, как и *.bak
+cu-quota.anchor.json.bak-*
