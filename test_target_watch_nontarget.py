@@ -15,6 +15,12 @@ import os
 import sys
 
 os.environ["MN_WATCH_MUTE"] = "1"          # второй контур: канал закрыт на транспорте
+# Стейт — на выброс. Этот стенд боевой target-watch.json НЕ пишет (watch_targets только
+# возвращает st), но дверь закрываем ЗАРАНЕЕ: соседний стенд 27.08 снёс им защёлки gone_*
+# и подарил флоту залп из трёх ложных тревог. Гард должен стоять до того, как понадобится.
+import tempfile
+os.environ["MN_WATCH_STATE"] = os.path.join(
+    tempfile.mkdtemp(prefix="tw-state-"), "target-watch.json")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import importlib

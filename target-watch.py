@@ -172,7 +172,14 @@ KNOWN_LIQUIDATORS = {
 
 RPCS = ["https://mainnet.base.org", "https://base-rpc.publicnode.com",
         "https://gateway.tenderly.co/public/base", "https://base.drpc.org"]
-STATE = os.path.expanduser("~/.fleet-watch/target-watch.json")
+# ПУТЬ СТЕЙТА — ПЕРЕОПРЕДЕЛЯЕМ ИЗ ОКРУЖЕНИЯ (27.08). Стенд, замутивший КАНАЛ, всё равно
+# писал БОЕВОЙ стейт: json.dump(cur, open(STATE,"w")) — это не транспорт, это другая дверь,
+# и MN_WATCH_MUTE её не закрывал. Цена: прогон стенда 27.08 ~01:1xZ снёс защёлки gone_*, и
+# следующий крон-прогон (01:15:02Z) прочитал пустое prev и дал ЗАЛП из трёх ложных
+# «ДОЛГ ЦЕЛИ → $0: долг $0 → $0» по всем целям сразу. Ровно тот класс, что
+# [[tests-never-touch-production-channels]], но по НЕ-КАНАЛЬНОЙ двери: сторож стоял на
+# отправке, а состояние осталось голым. Дверь закрыта здесь, у самого пути.
+STATE = os.environ.get("MN_WATCH_STATE") or os.path.expanduser("~/.fleet-watch/target-watch.json")
 # «видимый/достижимый горизонт»: ближе этого срока до окна конкурент снова важен
 COMP_HORIZON_SEC = float(os.environ.get("MN_COMP_HORIZON_DAYS", "7")) * 86400
 # Отправка ушла в общефлотский маршрутизатор (~/.fleet-watch/notify.py): токен, чат,

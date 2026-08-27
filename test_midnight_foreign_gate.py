@@ -15,8 +15,15 @@ log/tg и расчёт приза исполняются настоящие ([[s
 import importlib.util
 import os
 import sys
+import tempfile
 
 os.environ["MN_WATCH_MUTE"] = "1"          # второй контур: канал закрыт на транспорте
+# И ОТДЕЛЬНО — СТЕЙТ. Замутить канал НЕДОСТАТОЧНО: _scan_foreign пишет защёлку
+# json.dump(cur, open(STATE,"w")), и первая версия этого стенда снесла боевой
+# target-watch.json — крон-прогон 27.08 01:15:02Z прочитал пустое prev и выдал залп из трёх
+# ложных «ДОЛГ ЦЕЛИ → $0». Путь уводим ДО импорта модуля: STATE вычисляется на импорте.
+os.environ["MN_WATCH_STATE"] = os.path.join(
+    tempfile.mkdtemp(prefix="tw-state-"), "target-watch.json")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 _spec = importlib.util.spec_from_file_location(
