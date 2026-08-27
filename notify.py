@@ -213,7 +213,7 @@ def notify(text: str, *, source: str, hil: bool = False, key: str = "",
     return "tg" if ok else "inbox"
 
 
-def resolve(key: str, text: str) -> bool:
+def resolve(key: str, text: str, match: str = "", ts: int = 0) -> bool:
     """Записать ВЫВОД разбора в поле `resolution` своей тревоги в инбоксе.
 
     Существует потому, что вывод разбора терялся ДВАЖДЫ (20.08 и 22.08) одинаково: сессию
@@ -229,7 +229,18 @@ def resolve(key: str, text: str) -> bool:
     выходе по таймауту дубль размножил бы тревогу вместо того, чтобы донести вывод.
     Структурное лечение (sidecar-файл резолюций, append-only) — отдельной правкой, с тестом.
 
-    Возвращает True, если запись с таким key найдена и обновлена.
+    ПУСТОЙ КЛЮЧ — НЕ АДРЕС (27.08). Сторожа midnight/window-watch зовут notify() без key,
+    и в инбоксе одновременно лежало ЧЕТЫРЕ записи с key="": resolve("", ...) записал бы
+    один вывод во все четыре разом и стёр бы вывод предыдущей сессии по window-watch-2708.
+    Поэтому есть уточнители, оба необязательные (старое поведение по умолчанию):
+      match — подстрока, обязанная встретиться в text записи;
+      ts    — точная метка времени записи.
+    Уточнители СУЖАЮТ, а не расширяют: запись обязана удовлетворить всем заданным.
+    Если после сужения подходит БОЛЬШЕ ОДНОЙ записи — вывод НЕ пишется и возвращается
+    False: молчание лучше вывода, разлитого по чужим тревогам (там, где адрес неоднозначен,
+    «записал» неотличимо от «затёр»).
+
+    Возвращает True, если ровно одна неразобранная запись найдена и обновлена.
     """
     path = INBOX + (".muted" if muted() else "")
     try:
@@ -238,14 +249,19 @@ def resolve(key: str, text: str) -> bool:
     except (OSError, ValueError) as e:
         _log(f"resolve[{key}]: инбокс не прочитан: {e}")
         return False
-    hit = False
-    for r in recs:
-        if r.get("key") == key and not r.get("handled"):
-            r["resolution"] = text
-            hit = True
-    if not hit:
-        _log(f"resolve[{key}]: неразобранной записи с таким ключом нет — вывод НЕ записан")
+    sel = [r for r in recs
+           if r.get("key") == key and not r.get("handled")
+           and (not match or match in (r.get("text") or ""))
+           and (not ts or r.get("ts") == ts)]
+    if not sel:
+        _log(f"resolve[{key}|{match}|{ts}]: неразобранной записи нет — вывод НЕ записан")
         return False
+    if len(sel) > 1 and (match or ts or not key):
+        # Неоднозначный адрес: писать во все — значит затирать чужие выводы.
+        _log(f"resolve[{key}|{match}|{ts}]: подходит {len(sel)} записей — вывод НЕ записан")
+        return False
+    for r in sel:
+        r["resolution"] = text
     tmp = path + ".tmp"
     try:
         with open(tmp, "w") as f:
