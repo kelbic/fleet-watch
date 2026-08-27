@@ -19,13 +19,14 @@ if [ -z "$VERDICTS" ]; then
   exit 0
 fi
 
+log "старт: вердиктов за сутки $(printf '%s\n' "$VERDICTS" | wc -l), модель-цепочка opus→sonnet"
 PROMPT="Ты — независимый адверсарный ревьюер бота-ликвидатора (Morpho/Base). Проснулся по крону, человек не ждёт. Ниже — заявленные за сутки вердикты ведущей сессии (СТРОКИ-ЗАЯВЛЕНИЯ, обоснований тебе намеренно не дали). Выбери 1-2 с наибольшим радиусом поражения (деньги/nonce/стратегия) и для КАЖДОГО: (1) ПЕРЕМЕРЬ первичные источники САМ — journalctl -u liquidator-bot на root@185.173.146.134 (read-only!), публичная нода https://mainnet.base.org, код в $REPO/chain/; ЗАПРЕЩЕНО до завершения перемера читать docs/STATE.md и docs/Plan.md (это и есть взгляд, от которого ты независим); (2) вынеси вердикт: ПОДТВЕРЖДЁН / ОПРОВЕРГНУТ (чем) / НЕ ПРОВЕРЯЕМ (чего не хватает); (3) запиши исход: python3 -c 'import sys; sys.path.insert(0,\"$WATCH\"); from notify import notify; notify(\"<твой текст>\", source=\"blind-audit\", hil=False, key=\"blind-audit:<кратко>\", dedup_sec=86400)' — при ОПРОВЕРЖЕНИИ начни текст с «⛔ ОПРОВЕРГНУТО:». Ничего не менять: ни кода, ни env, ни рестартов — ты только судья. ВЕРДИКТЫ СУТОК:
 $VERDICTS"
 
 for MODEL in opus sonnet; do
   OUT=$(timeout 1500 "$CLAUDE" -p --model "$MODEL" "$PROMPT" 2>&1)
   RC=$?
-  if [ $RC -eq 0 ] && ! printf '%s' "$OUT" | grep -qiE "limit|quota exceeded"; then
+  if [ $RC -eq 0 ] && ! printf '%s' "$OUT" | grep -qiE "reached your .*limit|usage limit|rate limit exceeded"; then
     log "ок model=$MODEL: $(printf '%s' "$OUT" | tail -1 | cut -c1-200)"
     exit 0
   fi
