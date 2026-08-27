@@ -407,12 +407,15 @@ def fmt_loan(units: int, meta: dict) -> str:
     return f"{amt:,.4f} {meta['loan_sym']}"
 
 
-def missed_prize(f: dict, meta: dict) -> str | None:
-    """Упущенный приз = стоимость сейзнутого залога по оракулу − репей, в единицах займа.
+def missed_prize_units(f: dict, meta: dict) -> int | None:
+    """Упущенный приз В ЕДИНИЦАХ ЗАЙМА = стоимость сейзнутого по оракулу − репей.
 
     ЭТО ОЦЕНКА ПО ОРАКУЛУ, А НЕ ЦЕНА ВЫХОДА: реальная выручка конкурента ниже на слиппедж и
     газ (урок «цена оракула ≠ цена выхода» — там оценка потока разошлась с фактом в 23 раза).
     Нет оракула/цены ⇒ None: молча завышенное число хуже отсутствующего.
+
+    Отдаёт ЧИСЛО, а не текст (27.08): по этой величине теперь СУДИТ гейт алерта, а судить
+    по отформатированной строке нельзя. Форматирование — в missed_prize().
     """
     if not meta or not f.get("seized") or not f.get("collateral"):
         return None
@@ -426,7 +429,13 @@ def missed_prize(f: dict, meta: dict) -> str | None:
     if price <= 0:
         return None
     value = f["seized"] * price // ORACLE_PRICE_SCALE
-    return fmt_loan(value - f["repaid"], meta)
+    return value - f["repaid"]
+
+
+def missed_prize(f: dict, meta: dict) -> str | None:
+    """Тот же приз, отформатированный для текста алерта."""
+    units = missed_prize_units(f, meta)
+    return None if units is None else fmt_loan(units, meta)
 
 
 def foreign_liquidations(from_block: int, to_block: int) -> list[dict]:
@@ -751,12 +760,24 @@ def main() -> int:
             # 07.08: порог берётся в единицах ЗАЙМА ЭТОГО РЫНКА. Прежний общий порог в
             # units был верен ровно для 6-значных займов; на пяти WETH-рынках радара он не
             # отсекал ничего (см. шапку market_meta).
+            # 27.08: СУДИМ ПО ПРИЗУ, А НЕ ПО РЕПЕЮ. Пол огня — это пол на ЧИСТОМ профите
+            # (config.py: min_profit_usd — «floor on NET (profit − gas/tip cost)»), а гейт
+            # сравнивал с ним РАЗМЕР ВЛОЖЕНИЯ конкурента. Величины расходятся на порядки:
+            # 27.08 00:30Z репей $10,063.89 при призе $23.94, 00:45Z репей $1,003.90 при
+            # призе $3.11 — обе тревоги объявили «ВЫШЕ нашего пола $300» то, что ниже пола
+            # в 13 и 96 раз. Мы не могли их взять: приз не покрыл бы даже газ.
+            # Приз неизвестен (нет оракула) ⇒ судим по репею, как раньше: ошибка в сторону
+            # лишнего алерта, а не тишины (незнание не выдаём за «денег не было»).
             floor = meta.get("floor_units", FOREIGN_MIN_UNITS)
-            if f["repaid"] < floor:
+            prize_units = missed_prize_units(f, meta)
+            judged, judged_by = ((prize_units, "приз") if prize_units is not None
+                                 else (f["repaid"], "репей (приз не посчитан)"))
+            if judged < floor:
                 # post= сохраняем ИМЕННО здесь: пост-maturity взятие — самый ценный след для
                 # форензики (кто знает календарь), и он теперь виден только в логе.
-                log(f"чужой ликвидатор {f['caller']} ниже пола огня: "
-                    f"{fmt_loan(f['repaid'], meta)} (< {fmt_loan(floor, meta)}) "
+                log(f"чужой ликвидатор {f['caller']} ниже пола огня по {judged_by}: "
+                    f"{fmt_loan(judged, meta)} (< {fmt_loan(floor, meta)}) "
+                    f"при репее {fmt_loan(f['repaid'], meta)} "
                     f"post={f['post']} рынок {f['market'][:14]}… "
                     f"блок {f['block']} — в лог, без алерта")
                 continue
@@ -764,13 +785,14 @@ def main() -> int:
             # УПУЩЕННЫЙ ПРИЗ — то, ради чего этот алерт вообще существует: репей говорит,
             # СКОЛЬКО конкурент вложил, а не сколько заработал. Приз = стоимость сейзнутого
             # по оракулу − репей; помечен как оценка, потому что цена выхода ниже оракульной.
-            prize = missed_prize(f, meta)
+            prize = None if prize_units is None else fmt_loan(prize_units, meta)
             prize_txt = (f" Приз ≈{prize} (оценка по оракулу, не цена выхода)."
                          if prize else " Приз посчитать не удалось (нет цены оракула).")
             tg(f"🏁 [midnight] ДЕНЬГИ ПРОШЛИ МИМО: {f['caller']} взял {kind}позицию, "
                f"репей {fmt_loan(f['repaid'], meta)} на {f['market'][:14]}… "
                f"(блок {f['block']}, {when}).{prize_txt} "
-               f"Это ВЫШЕ нашего пола {fmt_loan(floor, meta)} — мы могли её взять и не взяли.")
+               f"Судил {judged_by}: {fmt_loan(judged, meta)} ВЫШЕ нашего пола "
+               f"{fmt_loan(floor, meta)} — мы могли её взять и не взяли.")
             log(f"АЛЕРТ: чужой ликвидатор {f['caller']} блок {f['block']} "
                 f"репей={f['repaid']} seized={f.get('seized')} приз={prize} "
                 f"post={f['post']} рынок={f['market'][:14]}")
