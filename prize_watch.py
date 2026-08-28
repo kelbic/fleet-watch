@@ -51,9 +51,11 @@ try:
     out["cov"]=[m["market_id"].lower() for m in json.load(open("/root/liquidator/covered_markets.json"))]
 except Exception: pass
 lg=call("eth_getLogs",[{"fromBlock":hex(lo),"toBlock":hex(hi),"address":M,"topics":[LIQ]}]) or []
+AU="0x0559884fd3a460db3073b7fc896cc77986f16e378210ded43186175bf646fc5f"
 for x in lg:
     b=int(x["blockNumber"],16); mid=x["topics"][1]
     d=out["blocks"].setdefault(str(b),{"mid":{},"ours":None,"caller":{}})
+    d.setdefault("liq_idx",[]).append(int(x["transactionIndex"],16))
     d["mid"][mid]=d["mid"].get(mid,0)+1
     d["caller"]["0x"+x["topics"][2][-40:]]=1
     d.setdefault("raw",0)
@@ -69,8 +71,34 @@ for mid in set(m for d in out["blocks"].values() for m in d["mid"]):
     except Exception: out.setdefault("lif",{})[mid]=None
 for b,d in out["blocks"].items():
     blk=call("eth_getBlockByNumber",[hex(int(b)),True]) or {}
-    d["ours"]=sum(1 for t in blk.get("transactions",[]) if (t.get("to") or "").lower() in (OUR,OUR2))
+    _our_idx=[int(t["transactionIndex"],16) for t in blk.get("transactions",[])
+              if (t.get("to") or "").lower() in (OUR,OUR2)]
+    d["ours"]=len(_our_idx)
     d["total"]=len(blk.get("transactions",[]))
+    # ГЕОМЕТРИЯ ГОНКИ (мера kelbic 28.08): не «попали ли в класс», а СКОЛЬКО ЧУЖИХ встало
+    # между транзитом и нашей первой ногой. Порядок внутри флешблока — по убыванию tip,
+    # поэтому «сразу за транзитом» и есть призовое место, а чужие в зазоре — прямая мера промаха.
+    try:
+        _au=call("eth_getLogs",[{"fromBlock":hex(int(b)),"toBlock":hex(int(b)),"topics":[AU]}]) or []
+        _tr=sorted({int(z["transactionIndex"],16) for z in _au})
+    except Exception:
+        _tr=[]
+    d["transit_idx"]=_tr
+    d["our_idx"]=sorted(_our_idx)[:3]
+    d["win_idx"]=sorted(d.get("liq_idx") or [])
+    def _behind(idx, trs):
+        pre=[t for t in trs if t<=idx]
+        return (max(pre) if pre else None)
+    if _tr and _our_idx:
+        _o=min(_our_idx); _t=_behind(_o,_tr)
+        d["our_delta"]= (_o-_t) if _t is not None else None
+        d["our_strangers"]= (_o-_t-1) if _t is not None else None
+        d["our_transit"]=_t          # ИМЕННО этот транзит судил дельту — его и печатать
+    if _tr and d.get("liq_idx"):
+        _w=min(d["liq_idx"]); _t=_behind(_w,_tr)
+        d["win_delta"]= (_w-_t) if _t is not None else None
+        d["win_strangers"]= (_w-_t-1) if _t is not None else None
+        d["win_transit"]=_t
 print(json.dumps(out))
 ''' % (OUR, MAX_SPAN)
 
@@ -164,9 +192,20 @@ def main():
         _prize = (usd * (_lif - 1.0)) if _lif else None
         _ptxt = ("приз ~$%.2f (брутто, до свопа и газа)" % _prize) if _prize is not None \
                 else "приз НЕИЗВЕСТЕН (не прочитан lltv)"
+        # ГЕОМЕТРИЯ: чужих между транзитом и нами — прямая мера промаха по месту
+        if d.get("transit_idx"):
+            _us = ("+%d (чужих между: %d)" % (d["our_delta"], d["our_strangers"])
+                   if d.get("our_delta") is not None else "нас за транзитом НЕТ")
+            _wn = ("+%d (чужих: %d)" % (d["win_delta"], d["win_strangers"])
+                   if d.get("win_delta") is not None else "—")
+            _tref = d.get("our_transit", d.get("win_transit"))
+            _geo = ("\nгеометрия: транзит idx %s (всего апдейтов %d) | победитель %s | мы %s"
+                    % (_tref if _tref is not None else "—", len(d["transit_idx"]), _wn, _us))
+        else:
+            _geo = "\nгеометрия: транзита в блоке НЕТ (таймерная ликвидация либо фид без AnswerUpdated)"
         notify("%s\nблок %s: %s | погашено ~$%.0f (размер позиции, НЕ приз)\n"
-               "ликвидаций %d (%s)\nнаших проб в блоке: %d из %d tx блока"
-               % (head_line, b, _ptxt, usd, n, mids, d["ours"], d.get("total", 0)),
+               "ликвидаций %d (%s)\nнаших проб в блоке: %d из %d tx блока%s"
+               % (head_line, b, _ptxt, usd, n, mids, d["ours"], d.get("total", 0), _geo),
                source="prize-watch", hil=True, key="prize-watch:%s" % b, dedup_sec=86400)
     if not dry:
         with open(STATE, "w") as f:
