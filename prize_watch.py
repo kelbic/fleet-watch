@@ -57,6 +57,15 @@ for x in lg:
     d["caller"]["0x"+x["topics"][2][-40:]]=1
     d.setdefault("raw",0)
     d["raw"]+=int(x["data"][2:66],16)
+# ПРИЗ, А НЕ ПОГАШЕНИЕ. 28.08: тревога печатала repaidAssets ("погашено ~$3") и человек
+# читал это как размер приза. Настоящий приз = бонус ликвидатора = repaid*(LIF-1), где
+# LIF = 1/(1-0.3*(1-lltv)) — тождество Morpho, сошлось на четырёх событиях до 6 знаков.
+for mid in set(m for d in out["blocks"].values() for m in d["mid"]):
+    try:
+        r=call("eth_call",[{"to":M,"data":"0x2c3c9157"+mid[2:]},"latest"])
+        lltv=int(r[2+4*64:2+5*64],16)/10**18
+        out.setdefault("lif",{})[mid]=1.0/(1.0-0.3*(1.0-lltv)) if lltv>0 else None
+    except Exception: out.setdefault("lif",{})[mid]=None
 for b,d in out["blocks"].items():
     blk=call("eth_getBlockByNumber",[hex(int(b)),True]) or {}
     d["ours"]=sum(1 for t in blk.get("transactions",[]) if (t.get("to") or "").lower()==OUR)
@@ -147,9 +156,16 @@ def main():
         head_line = ("\U0001F3C6 НАША ПОБЕДА" if we_won else
                      ("\U0001F3AF мы БЫЛИ в призовом блоке" if d["ours"] else
                       "\U0001F4A4 приз мимо: нас в блоке НЕ БЫЛО"))
-        notify("%s\nблок %s: ликвидаций %d (%s), погашено ~$%.0f\n"
-               "наших проб в блоке: %d из %d tx блока"
-               % (head_line, b, n, mids, usd, d["ours"], d.get("total", 0)),
+        # приз считаем по LIF того рынка, где была ликвидация (если рынков несколько — берём
+        # минимальный LIF, чтобы НЕ ЗАВЫСИТЬ; незнание LIF закрывает претензию на число, а не гард)
+        _lifs = [v for k, v in (data.get("lif") or {}).items() if k in d["mid"] and v]
+        _lif = min(_lifs) if _lifs else None
+        _prize = (usd * (_lif - 1.0)) if _lif else None
+        _ptxt = ("приз ~$%.2f (брутто, до свопа и газа)" % _prize) if _prize is not None \
+                else "приз НЕИЗВЕСТЕН (не прочитан lltv)"
+        notify("%s\nблок %s: %s | погашено ~$%.0f (размер позиции, НЕ приз)\n"
+               "ликвидаций %d (%s)\nнаших проб в блоке: %d из %d tx блока"
+               % (head_line, b, _ptxt, usd, n, mids, d["ours"], d.get("total", 0)),
                source="prize-watch", hil=True, key="prize-watch:%s" % b, dedup_sec=86400)
     if not dry:
         with open(STATE, "w") as f:
