@@ -235,11 +235,8 @@ def main():
                     % (_tref if _tref is not None else "—", len(d["transit_idx"]), _wn, _us, _gwt))
         else:
             _geo = "\nгеометрия: транзита в блоке НЕТ (таймерная ликвидация либо фид без AnswerUpdated)"
-        _bot = d.get("bot") or {}
-        if not d["ours"] and _bot and "err" not in _bot:
-            _link = ("звено 0 (окно): %s | звено 1 (отправок ±60с): %d | отказов гейта: %d"
-                     % ("ОТКРЫТО" if _bot["opened"] else "ЗАКРЫТО — не стреляли по построению", _bot["sent"], _bot["skip"]))
-            _geo += "\nПОЧЕМУ НАС НЕ БЫЛО: " + _link
+        # (28.08 kelbic: строку «ПОЧЕМУ НАС НЕ БЫЛО» в тревогу не добавлять — формат гонки оставить как есть)
+
         notify("%s\nблок %s: %s | погашено ~$%.0f (размер позиции, НЕ приз)\n"
                "ликвидаций %d (%s)\nнаших проб в блоке: %d из %d tx блока%s"
                % (head_line, b, _ptxt, usd, n, mids, d["ours"], d.get("total", 0), _geo),
