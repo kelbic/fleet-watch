@@ -74,7 +74,7 @@ for mid in set(m for d in out["blocks"].values() for m in d["mid"]):
         lltv=int(r[2+4*64:2+5*64],16)/10**18
         out.setdefault("lif",{})[mid]=1.0/(1.0-0.3*(1.0-lltv)) if lltv>0 else None
         # ПАРА РЫНКА (kelbic 28.08: «иначе непонятно что это»)
-        out.setdefault("pair",{})[mid]="%s/%s" % (_sym("0x"+r[2+64+24:2+2*64]), _sym("0x"+r[26:66]))
+        out.setdefault("pair",{})[mid]="%%s/%%s" %% (_sym("0x"+r[2+64+24:2+2*64]), _sym("0x"+r[26:66]))
     except Exception: out.setdefault("lif",{})[mid]=None
 for b,d in out["blocks"].items():
     blk=call("eth_getBlockByNumber",[hex(int(b)),True]) or {}
