@@ -27,7 +27,7 @@ HOST = "root@185.173.146.134"
 STATE = os.path.expanduser("~/.fleet-watch/prize_watch.state")
 LOOKBACK = int(os.environ.get("PRIZE_WATCH_LOOKBACK", "300"))      # блоков при первом запуске
 MAX_SPAN = int(os.environ.get("PRIZE_WATCH_MAX_SPAN", "9000"))     # не читать больше за раз
-OUR = "0x8f92cac0b6586f834de33cf31819db0ebf6e52b9"
+OUR = "0x5f34e0b1e716ff5f5c77f9c0b176a889215d39ed"   # СВИП-доска с 28.08; старая 0x8f92cac0 считается как OUR2
 
 REMOTE = r'''
 import json,urllib.request,sys
@@ -43,6 +43,7 @@ def call(m,p):
 M="0xbbbbbbbbbb9cc5e90e3b3af64bdaf62c37eeffcb"
 LIQ="0xa4946ede45d0c6f06a0f5ce92c9ad3b4751452d2fe0e25010783bcab57a67e41"
 OUR="%s"
+OUR2="0x8f92cac0b6586f834de33cf31819db0ebf6e52b9"
 lo=int(sys.argv[1]); head=int(call("eth_blockNumber",[]),16)
 hi=min(head, lo+%d)
 out={"head":head,"lo":lo,"hi":hi,"blocks":{},"cov":None}
@@ -68,7 +69,7 @@ for mid in set(m for d in out["blocks"].values() for m in d["mid"]):
     except Exception: out.setdefault("lif",{})[mid]=None
 for b,d in out["blocks"].items():
     blk=call("eth_getBlockByNumber",[hex(int(b)),True]) or {}
-    d["ours"]=sum(1 for t in blk.get("transactions",[]) if (t.get("to") or "").lower()==OUR)
+    d["ours"]=sum(1 for t in blk.get("transactions",[]) if (t.get("to") or "").lower() in (OUR,OUR2))
     d["total"]=len(blk.get("transactions",[]))
 print(json.dumps(out))
 ''' % (OUR, MAX_SPAN)
