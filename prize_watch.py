@@ -76,8 +76,23 @@ for mid in set(m for d in out["blocks"].values() for m in d["mid"]):
         # ПАРА РЫНКА (kelbic 28.08: «иначе непонятно что это»)
         out.setdefault("pair",{})[mid]="%%s/%%s" %% (_sym("0x"+r[2+64+24:2+2*64]), _sym("0x"+r[26:66]))
     except Exception: out.setdefault("lif",{})[mid]=None
+import subprocess, datetime as _dt
+def _journal_state(ts):
+    """Что делал бот в ±60с от блока: было ли ОТКРЫТО окно (window open/armed) и сколько отправок."""
+    try:
+        lo=_dt.datetime.utcfromtimestamp(ts-60).strftime("%%Y-%%m-%%d %%H:%%M:%%S"); hi=_dt.datetime.utcfromtimestamp(ts+60).strftime("%%Y-%%m-%%d %%H:%%M:%%S")
+        L=subprocess.run(["journalctl","-u","liquidator-bot","--since",lo,"--until",hi,"--no-pager","-o","cat"],capture_output=True,text=True,timeout=60).stdout
+        opened=len([1 for l in L.splitlines() if "SPECFIRE window" in l and ("open" in l or "armed" in l or "arm " in l)])
+        closed=len([1 for l in L.splitlines() if "window close" in l])
+        sent=len([1 for l in L.splitlines() if "probe #" in l or "volley leg=" in l or "ACTIONABLE" in l])
+        skip=len([1 for l in L.splitlines() if "ОТКЛОНЁН" in l or "вне досягаемости" in l or "не собралась" in l])
+        return {"opened":opened,"closed":closed,"sent":sent,"skip":skip}
+    except Exception as e:
+        return {"err":type(e).__name__}
 for b,d in out["blocks"].items():
     blk=call("eth_getBlockByNumber",[hex(int(b)),True]) or {}
+    try: d["bot"]=_journal_state(int(blk.get("timestamp","0x0"),16))
+    except Exception: d["bot"]={"err":"ts"}
     _our_idx=[int(t["transactionIndex"],16) for t in blk.get("transactions",[])
               if (t.get("to") or "").lower() in (OUR,OUR2)]
     d["ours"]=len(_our_idx)
@@ -220,6 +235,11 @@ def main():
                     % (_tref if _tref is not None else "—", len(d["transit_idx"]), _wn, _us, _gwt))
         else:
             _geo = "\nгеометрия: транзита в блоке НЕТ (таймерная ликвидация либо фид без AnswerUpdated)"
+        _bot = d.get("bot") or {}
+        if not d["ours"] and _bot and "err" not in _bot:
+            _link = ("звено 0 (окно): %s | звено 1 (отправок ±60с): %d | отказов гейта: %d"
+                     % ("ОТКРЫТО" if _bot["opened"] else "ЗАКРЫТО — не стреляли по построению", _bot["sent"], _bot["skip"]))
+            _geo += "\nПОЧЕМУ НАС НЕ БЫЛО: " + _link
         notify("%s\nблок %s: %s | погашено ~$%.0f (размер позиции, НЕ приз)\n"
                "ликвидаций %d (%s)\nнаших проб в блоке: %d из %d tx блока%s"
                % (head_line, b, _ptxt, usd, n, mids, d["ours"], d.get("total", 0), _geo),
