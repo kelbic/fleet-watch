@@ -31,19 +31,55 @@ blind() {  # $1=причина $2=ключ дедупа. Серию считае
   exit 1
 }
 
-N=$(ssh -o ConnectTimeout=8 -o BatchMode=yes "$HOST" \
-    'BPID=$(systemctl show -p MainPID --value liquidator-bot); ls /proc/$BPID/task 2>/dev/null | wc -l' 2>/dev/null)
+# ОДИН ssh на прогон (эффект наблюдателя на боевой машине): числитель, ЖИВОЙ знаменатель и
+# состав тредов забираются вместе. 28.08: прежний знаменатель был ВШИТОЙ СТРОКОЙ «/1024» —
+# живой TasksMax оказался 2048 (рантаймный drop-in в /run), и порог 600, калиброванный как
+# ~60% от 1024, звонил на 32% реального лимита. Самоотчёт шаблона режимом не является:
+# лимит ЧИТАЕТСЯ, порог ВЫЧИСЛЯЕТСЯ долей (память quota-is-an-integral, 5-я форма).
+# СОСТАВ ПИКА — тоже замером: py-spy на Шарлотте НЕТ, а к моменту побудки агента пик уже
+# сходит (14:50 648 -> 15:00 174), т.е. предписанная прошлой тревогой диагностика была бы
+# нулевым тестом. Гистограмма имён снимается В МОМЕНТ пересечения и едет В ТЕКСТ тревоги.
+FRAC=${TW_FRAC:-0.6}
+R=$(ssh -o ConnectTimeout=8 -o BatchMode=yes "$HOST" '
+  BPID=$(systemctl show -p MainPID --value liquidator-bot)
+  echo "N=$(ls /proc/$BPID/task 2>/dev/null | wc -l)"
+  echo "MAX=$(systemctl show -p TasksMax --value liquidator-bot 2>/dev/null)"
+  echo "PMAX=$(grep -h "^TasksMax=" /etc/systemd/system/liquidator-bot.service \
+        /etc/systemd/system.control/liquidator-bot.service.d/*.conf 2>/dev/null \
+        | tail -1 | cut -d= -f2)"
+  echo "TOP=$(cat /proc/$BPID/task/*/comm 2>/dev/null | sed "s/[0-9]*$//" \
+        | sort | uniq -c | sort -rn | head -4 | awk "{printf \"%s×%s \", \$2, \$1}")"
+' 2>/dev/null)
+N=$(printf '%s\n' "$R" | sed -n 's/^N=//p')
+MAX=$(printf '%s\n' "$R" | sed -n 's/^MAX=//p')
+PMAX=$(printf '%s\n' "$R" | sed -n 's/^PMAX=//p')
+TOP=$(printf '%s\n' "$R" | sed -n 's/^TOP=//p')
 case "$N" in (''|*[!0-9]*) blind "ssh/PID не дали числа" threads-blind ;; esac
 # У ЖИВОГО процесса тредов всегда >=1. Ноль = MainPID=0: служба не бежит (или юнита нет).
 # Три прогона подряд, а не первый: MainPID кратковременно 0 в момент рестарта systemd.
 if [ "$N" -lt 1 ]; then
   blind "MainPID=0, служба liquidator-bot не бежит (треды не у кого считать)" threads-botdown
 fi
+# ЗНАМЕНАТЕЛЬ ТОЖЕ СУБЪЕКТ НАБЛЮДЕНИЯ: нечитаемый лимит = НЕ НАБЛЮДАЕМ, а не «возьмём 1024».
+# Ровно ложный знаменатель и родил тревогу 28.08 — незнание обязано закрывать гард.
+case "$MAX" in
+  (infinity) echo 0 > "$F"; echo "$(date -u +%H:%M) threads=$N max=infinity" >> "$LOG"; exit 0 ;;
+  (''|*[!0-9]*) blind "TasksMax не число ('$MAX') — знаменатель не наблюдаем" threads-nomax ;;
+esac
 echo 0 > "$F"
-echo "$(date -u +%H:%M) threads=$N" >> "$LOG"
+# Формат строки не переломан (`threads=N` первым полем): по нему считается распределение,
+# на которое калибруется доля. Новые поля ДОПИСАНЫ, а не переставлены.
+echo "$(date -u +%H:%M) threads=$N max=$MAX" >> "$LOG"
 tail -n 2000 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
-if [ "$N" -ge 600 ]; then
+THR=$(awk -v m="$MAX" -v f="$FRAC" 'BEGIN{printf "%d", m*f}')
+if [ "$N" -ge "$THR" ]; then
+  # Тревога несёт числа, по которым судила (и свои, и эталонные), плюс чей пик — иначе
+  # разбор начинается с перемера, а пика к тому времени уже нет.
+  PN=${PMAX:-?}
+  W=""
+  [ "$PN" != "?" ] && [ "$PN" != "$MAX" ] && \
+    W=" ⚠ персистентный лимит $PN ≠ живого $MAX (живой из /run — испарится на ребуте, порог пересчитается сам)"
   "$NOTIFY" threads-watch 0 \
-    "🧵 ТРЕДЫ БОТА $N/1024 (порог 600) — давление к шторму спавна. Разбор агенту: чей пик (py-spy dump), душить ли поток, пора ли коллектор на путь окна (ревью-п.9)" 3600 threads-pressure
+    "🧵 ТРЕДЫ БОТА $N/$MAX (порог ${FRAC}×$MAX=$THR) — давление к шторму спавна. Состав СЕЙЧАС: ${TOP:-?}.$W Разбор агенту: душить ли поток, пора ли коллектор на путь окна (ревью-п.9)" 3600 threads-pressure
 fi
 exit 0
