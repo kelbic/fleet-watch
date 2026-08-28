@@ -99,6 +99,11 @@ for b,d in out["blocks"].items():
         d["win_delta"]= (_w-_t) if _t is not None else None
         d["win_strangers"]= (_w-_t-1) if _t is not None else None
         d["win_transit"]=_t
+    # KPI kelbic 28.08: ПОЗИЦИЙ МЕЖДУ ПОБЕДИТЕЛЕМ И НАМИ — отставание от того, кто ВЗЯЛ, а не от
+    # транзита. Отрицательное = мы стояли РАНЬШЕ победителя (и всё равно не взяли — значит цель/тип).
+    if d.get("liq_idx") and _our_idx:
+        _w=min(d["liq_idx"]); _o=min(_our_idx)
+        d["gap_to_winner"]=_o-_w
 print(json.dumps(out))
 ''' % (OUR, MAX_SPAN)
 
@@ -199,8 +204,12 @@ def main():
             _wn = ("+%d (чужих: %d)" % (d["win_delta"], d["win_strangers"])
                    if d.get("win_delta") is not None else "—")
             _tref = d.get("our_transit", d.get("win_transit"))
-            _geo = ("\nгеометрия: транзит idx %s (всего апдейтов %d) | победитель %s | мы %s"
-                    % (_tref if _tref is not None else "—", len(d["transit_idx"]), _wn, _us))
+            _gw = d.get("gap_to_winner")
+            _gwt = ("" if _gw is None else
+                    ("\nKPI: между победителем и нами %d позиций" % _gw if _gw > 0 else
+                     "\nKPI: мы стояли РАНЬШЕ победителя на %d — проиграли не местом, а целью/типом" % (-_gw)))
+            _geo = ("\nгеометрия: транзит idx %s (всего апдейтов %d) | победитель %s | мы %s%s"
+                    % (_tref if _tref is not None else "—", len(d["transit_idx"]), _wn, _us, _gwt))
         else:
             _geo = "\nгеометрия: транзита в блоке НЕТ (таймерная ликвидация либо фид без AnswerUpdated)"
         notify("%s\nблок %s: %s | погашено ~$%.0f (размер позиции, НЕ приз)\n"
