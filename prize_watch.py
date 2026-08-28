@@ -63,11 +63,18 @@ for x in lg:
 # ПРИЗ, А НЕ ПОГАШЕНИЕ. 28.08: тревога печатала repaidAssets ("погашено ~$3") и человек
 # читал это как размер приза. Настоящий приз = бонус ликвидатора = repaid*(LIF-1), где
 # LIF = 1/(1-0.3*(1-lltv)) — тождество Morpho, сошлось на четырёх событиях до 6 знаков.
+def _sym(a):
+    try:
+        x=call("eth_call",[{"to":a,"data":"0x95d89b41"},"latest"]); n=int(x[66:130],16)
+        return bytes.fromhex(x[130:130+n*2]).decode(errors="replace")
+    except Exception: return a[:8]
 for mid in set(m for d in out["blocks"].values() for m in d["mid"]):
     try:
         r=call("eth_call",[{"to":M,"data":"0x2c3c9157"+mid[2:]},"latest"])
         lltv=int(r[2+4*64:2+5*64],16)/10**18
         out.setdefault("lif",{})[mid]=1.0/(1.0-0.3*(1.0-lltv)) if lltv>0 else None
+        # ПАРА РЫНКА (kelbic 28.08: «иначе непонятно что это»)
+        out.setdefault("pair",{})[mid]="%s/%s" % (_sym("0x"+r[2+64+24:2+2*64]), _sym("0x"+r[26:66]))
     except Exception: out.setdefault("lif",{})[mid]=None
 for b,d in out["blocks"].items():
     blk=call("eth_getBlockByNumber",[hex(int(b)),True]) or {}
@@ -184,7 +191,8 @@ def main():
             if cov is None:
                 return " покрытие?"
             return "" if m.lower() in cov else " ВНЕ ПОКРЫТИЯ"
-        mids = ", ".join("%s x%d%s" % (m[:10], c, _mark(m)) for m, c in d["mid"].items())
+        _pairs = data.get("pair") or {}
+        mids = ", ".join("%s %s x%d%s" % (_pairs.get(m, "?"), m[:10], c, _mark(m)) for m, c in d["mid"].items())
         we_won = OUR.lower() in {k.lower() for k in d["caller"]}
         usd = d.get("raw", 0) / 1e6           # заём почти везде USDC; WETH-рынки завысят — назван
         head_line = ("\U0001F3C6 НАША ПОБЕДА" if we_won else
@@ -202,7 +210,7 @@ def main():
             _us = ("+%d (чужих между: %d)" % (d["our_delta"], d["our_strangers"])
                    if d.get("our_delta") is not None else "нас за транзитом НЕТ")
             _wn = ("+%d (чужих: %d)" % (d["win_delta"], d["win_strangers"])
-                   if d.get("win_delta") is not None else "—")
+                   if d.get("win_delta") is not None else "ДО первого апдейта в блоке (цена сменилась раньше или таймерная)")
             _tref = d.get("our_transit", d.get("win_transit"))
             _gw = d.get("gap_to_winner")
             _gwt = ("" if _gw is None else
