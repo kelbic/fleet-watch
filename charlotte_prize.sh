@@ -8,11 +8,13 @@ S=/home/claude-agent/.fleet-watch/prize_watch.state
 [ -r "$L" ] || { echo "0 - - -"; exit 0; }
 awk '
   /^[0-9]{4}-[0-9]{2}-[0-9]{2}T/ { ts=$1 }
-  /блок [0-9]+: ликвидаций/ {
+  /блок [0-9]+: (приз|ликвидаций)/ {
      b=$2; sub(/:$/,"",b);
      if (!(b in seen)) { seen[b]=1; n++ }
      last_ts=ts; last_b=b;
-     if (match($0, /погашено ~\$[0-9.]+/)) last_p=substr($0, RSTART+10, RLENGTH-10);
+     # ПРИЗ, а не погашение (28.08: строка стала «блок N: приз ~$X ... | погашено ~$Y»)
+     if (match($0, /приз ~\$[0-9.]+/)) last_p=substr($0, RSTART+6, RLENGTH-6);
+     else if (match($0, /погашено ~\$[0-9.]+/)) last_p=substr($0, RSTART+10, RLENGTH-10);
   }
   END { printf "%d %s %s %s\n", n+0, (last_ts==""?"-":last_ts), (last_b==""?"-":last_b), (last_p==""?"-":last_p) }
 ' "$L"
