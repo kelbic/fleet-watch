@@ -126,6 +126,20 @@ for b,d in out["blocks"].items():
     if d.get("liq_idx") and _our_idx:
         _w=min(d["liq_idx"]); _o=min(_our_idx)
         d["gap_to_winner"]=_o-_w
+    # KPI, когда нас в призовом блоке НЕТ: опоздание в БЛОКАХ. 28.08 гонка 50572467 ($2 375) — наш
+    # выстрел сел в +1 блок, 50576516 — в +11 (22 с); без этой строки оба читались как «нас не было».
+    if d.get("liq_idx") and not _our_idx:
+        d["our_next"]=None
+        for _k in range(1,13):
+            try:
+                _nb=call("eth_getBlockByNumber",[hex(int(b)+_k),True]) or {}
+            except Exception:
+                break
+            _ni=[int(t["transactionIndex"],16) for t in _nb.get("transactions",[])
+                 if (t.get("to") or "").lower() in (OUR,OUR2)]
+            if _ni:
+                d["our_next"]=[_k,min(_ni),len(_nb.get("transactions",[]))]
+                break
 print(json.dumps(out))
 ''' % (OUR, MAX_SPAN)
 
@@ -221,20 +235,32 @@ def main():
         _ptxt = ("приз ~$%.2f (брутто, до свопа и газа)" % _prize) if _prize is not None \
                 else "приз НЕИЗВЕСТЕН (не прочитан lltv)"
         # ГЕОМЕТРИЯ: чужих между транзитом и нами — прямая мера промаха по месту
+        # KPI (kelbic 28.08) печатается ВСЕГДА, когда есть победитель: и с транзитом, и без него
+        # (28.08 гонка 50576516: таймерная ликвидация без AnswerUpdated — KPI 34 был посчитан, но
+        # строка жила только в ветке «транзит есть» и в тревогу не попала).
+        _gw = d.get("gap_to_winner")
+        _nx = d.get("our_next")
+        if _gw is not None:
+            _gwt = ("\nKPI: между победителем и нами %d позиций" % _gw if _gw > 0 else
+                    "\nKPI: мы стояли РАНЬШЕ победителя на %d — проиграли не местом, а целью/типом" % (-_gw))
+        elif d.get("liq_idx") and _nx:
+            _gwt = ("\nKPI: нас в призовом блоке НЕТ — первая наша tx через +%d блок(а) (~%d с), tx#%d из %d"
+                    % (_nx[0], 2 * _nx[0], _nx[1], _nx[2]))
+        elif d.get("liq_idx"):
+            _gwt = "\nKPI: нас нет ни в призовом блоке, ни в 12 следующих"
+        else:
+            _gwt = ""
         if d.get("transit_idx"):
             _us = ("+%d (чужих между: %d)" % (d["our_delta"], d["our_strangers"])
                    if d.get("our_delta") is not None else "нас за транзитом НЕТ")
             _wn = ("+%d (чужих: %d)" % (d["win_delta"], d["win_strangers"])
                    if d.get("win_delta") is not None else "ДО первого апдейта в блоке (цена сменилась раньше или таймерная)")
             _tref = d.get("our_transit", d.get("win_transit"))
-            _gw = d.get("gap_to_winner")
-            _gwt = ("" if _gw is None else
-                    ("\nKPI: между победителем и нами %d позиций" % _gw if _gw > 0 else
-                     "\nKPI: мы стояли РАНЬШЕ победителя на %d — проиграли не местом, а целью/типом" % (-_gw)))
             _geo = ("\nгеометрия: транзит idx %s (всего апдейтов %d) | победитель %s | мы %s%s"
                     % (_tref if _tref is not None else "—", len(d["transit_idx"]), _wn, _us, _gwt))
         else:
-            _geo = "\nгеометрия: транзита в блоке НЕТ (таймерная ликвидация либо фид без AnswerUpdated)"
+            _geo = ("\nгеометрия: транзита в блоке НЕТ (таймерная ликвидация либо фид без AnswerUpdated)"
+                    + _gwt)
         # (28.08 kelbic: строку «ПОЧЕМУ НАС НЕ БЫЛО» в тревогу не добавлять — формат гонки оставить как есть)
 
         notify("%s\nблок %s: %s | погашено ~$%.0f (размер позиции, НЕ приз)\n"
