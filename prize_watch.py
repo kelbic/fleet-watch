@@ -75,6 +75,12 @@ for mid in set(m for d in out["blocks"].values() for m in d["mid"]):
         out.setdefault("lif",{})[mid]=1.0/(1.0-0.3*(1.0-lltv)) if lltv>0 else None
         # ПАРА РЫНКА (kelbic 28.08: «иначе непонятно что это»)
         out.setdefault("pair",{})[mid]="%%s/%%s" %% (_sym("0x"+r[2+64+24:2+2*64]), _sym("0x"+r[26:66]))
+        # 29.08: ЗНАКИ И СИМВОЛ ТОКЕНА ЗАЙМА — прежнее «/1e6, заём почти везде USDC» отправило владельцу
+        # «приз ~$1 273 058 604» по рынку RLP/USR (займ 18 знаков, погашено 0.029 USR).
+        try:
+            _la="0x"+r[26:66]; _dx=call("eth_call",[{"to":_la,"data":"0x313ce567"},"latest"])
+            out.setdefault("loan",{})[mid]=[int(_dx,16), _sym(_la)]
+        except Exception: out.setdefault("loan",{})[mid]=[6, "?"]
     except Exception: out.setdefault("lif",{})[mid]=None
 import subprocess, datetime as _dt
 def _journal_state(ts):
@@ -223,7 +229,14 @@ def main():
         _pairs = data.get("pair") or {}
         mids = ", ".join("%s %s x%d%s" % (_pairs.get(m, "?"), m[:10], c, _mark(m)) for m, c in d["mid"].items())
         we_won = OUR.lower() in {k.lower() for k in d["caller"]}
-        usd = d.get("raw", 0) / 1e6           # заём почти везде USDC; WETH-рынки завысят — назван
+        # 29.08: единицы — по decimals токена займа; в USD только стейблы, иначе — в токене (цена не известна)
+        _loans = data.get("loan") or {}
+        _lmid = next(iter(d["mid"]), None)
+        _ldec, _lsym = (_loans.get(_lmid) or [6, "USDC"])[:2]
+        _stable = _lsym in ("USDC", "USDbC", "USDT", "EURC", "USDS", "DAI")
+        usd = d.get("raw", 0) / (10 ** int(_ldec))
+        _unit = "$" if _stable else ""
+        _unit_sfx = "" if _stable else " %s (не USD — цена токена займа не известна)" % _lsym
         head_line = ("\U0001F3C6 НАША ПОБЕДА" if we_won else
                      ("\U0001F3AF мы БЫЛИ в призовом блоке" if d["ours"] else
                       "\U0001F4A4 приз мимо: нас в блоке НЕ БЫЛО"))
@@ -232,7 +245,7 @@ def main():
         _lifs = [v for k, v in (data.get("lif") or {}).items() if k in d["mid"] and v]
         _lif = min(_lifs) if _lifs else None
         _prize = (usd * (_lif - 1.0)) if _lif else None
-        _ptxt = ("приз ~$%.2f (брутто, до свопа и газа)" % _prize) if _prize is not None \
+        _ptxt = ("приз ~%s%.2f%s (брутто, до свопа и газа)" % (_unit, _prize, _unit_sfx)) if _prize is not None \
                 else "приз НЕИЗВЕСТЕН (не прочитан lltv)"
         # ГЕОМЕТРИЯ: чужих между транзитом и нами — прямая мера промаха по месту
         # KPI (kelbic 28.08) печатается ВСЕГДА, когда есть победитель: и с транзитом, и без него
@@ -263,9 +276,9 @@ def main():
                     + _gwt)
         # (28.08 kelbic: строку «ПОЧЕМУ НАС НЕ БЫЛО» в тревогу не добавлять — формат гонки оставить как есть)
 
-        notify("%s\nблок %s: %s | погашено ~$%.0f (размер позиции, НЕ приз)\n"
+        notify("%s\nблок %s: %s | погашено ~%s%.2f%s (размер позиции, НЕ приз)\n"
                "ликвидаций %d (%s)\nнаших проб в блоке: %d из %d tx блока%s"
-               % (head_line, b, _ptxt, usd, n, mids, d["ours"], d.get("total", 0), _geo),
+               % (head_line, b, _ptxt, _unit, usd, _unit_sfx, n, mids, d["ours"], d.get("total", 0), _geo),
                source="prize-watch", hil=True, key="prize-watch:%s" % b, dedup_sec=86400)
     if not dry:
         with open(STATE, "w") as f:
