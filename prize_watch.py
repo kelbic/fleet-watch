@@ -233,7 +233,7 @@ def main():
         _loans = data.get("loan") or {}
         _lmid = next(iter(d["mid"]), None)
         _ldec, _lsym = (_loans.get(_lmid) or [6, "USDC"])[:2]
-        _stable = _lsym in ("USDC", "USDbC", "USDT", "EURC", "USDS", "DAI")
+        _stable = _lsym in ("USDC", "USDbC", "USDT", "EURC", "USDS", "DAI", "USR", "USDe", "GHO", "USDA")   # USR = Resolv, ~$1
         usd = d.get("raw", 0) / (10 ** int(_ldec))
         _unit = "$" if _stable else ""
         _unit_sfx = "" if _stable else " %s (не USD — цена токена займа не известна)" % _lsym
@@ -276,6 +276,13 @@ def main():
                     + _gwt)
         # (28.08 kelbic: строку «ПОЧЕМУ НАС НЕ БЫЛО» в тревогу не добавлять — формат гонки оставить как есть)
 
+        # 29.08: пыль ВНЕ покрытия (RLP/USR, ZRO/USDC…) — не гонка, тренироваться там нельзя; в TG не слать,
+        # только строка в лог (без «блок N: приз», чтобы сторож 💀 не считал её призовым блоком).
+        _all_out = cov is not None and all(m.lower() not in cov for m in d["mid"])
+        if _all_out and ((_stable and usd < 1.0) or (not _stable and usd < 0.001)):
+            print("[prize-watch] пропуск — вне покрытия, пыль: блок %s (погашено ~%s%.4f%s)"
+                  % (b, _unit, usd, _unit_sfx))
+            continue
         notify("%s\nблок %s: %s | погашено ~%s%.2f%s (размер позиции, НЕ приз)\n"
                "ликвидаций %d (%s)\nнаших проб в блоке: %d из %d tx блока%s"
                % (head_line, b, _ptxt, _unit, usd, _unit_sfx, n, mids, d["ours"], d.get("total", 0), _geo),
