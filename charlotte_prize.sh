@@ -13,8 +13,11 @@ awk '
      if (!(b in seen)) { seen[b]=1; n++ }
      last_ts=ts; last_b=b;
      # ПРИЗ, а не погашение (28.08: строка стала «блок N: приз ~$X ... | погашено ~$Y»)
-     if (match($0, /приз ~\$[0-9.]+/)) last_p=substr($0, RSTART+6, RLENGTH-6);
-     else if (match($0, /погашено ~\$[0-9.]+/)) last_p=substr($0, RSTART+10, RLENGTH-10);
+     # 29.08: приз и блок — из ОДНОЙ строки (раньше «$» от старой строки прилипал к новому блоку: RLP/USR печатал
+     # «приз ~0.00 USR» без «$», и 💀 понёс «$1 273 058 604» от предыдущей записи). Единица — любая.
+     last_p="-";
+     if (match($0, /приз ~\$?[0-9.]+( [A-Za-z]+)?/)) { last_p=substr($0, RSTART+6, RLENGTH-6); sub(/^~/,"",last_p) }
+     else if (match($0, /погашено ~\$?[0-9.]+( [A-Za-z]+)?/)) { last_p=substr($0, RSTART+10, RLENGTH-10); sub(/^~/,"",last_p) }
   }
   END { printf "%d %s %s %s\n", n+0, (last_ts==""?"-":last_ts), (last_b==""?"-":last_b), (last_p==""?"-":last_p) }
 ' "$L"
