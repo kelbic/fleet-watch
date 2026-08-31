@@ -2,9 +2,21 @@
 """KPI владельца за 24ч — «позиций между ПОБЕДИТЕЛЕМ и нами» — из журнала prize_watch.
 Идёт отдельной строкой ВСЛЕД за боевой сводкой (та бежит на боевой машине и этот журнал
 не видит). Ноль гонок с нашим участием — тоже ответ, и он печатается, а не молчит."""
-import re, sys, time, datetime as dt
+import os, re, sys, time, datetime as dt
 sys.path.insert(0, "/home/claude-agent/.fleet-watch")
 LOG = "/home/claude-agent/.fleet-watch/prize-watch.log"
+# ВЫВОД ИЗ ЭКСПЛУАТАЦИИ (31.08, крон-триаж cu-quota:blind). Этот KPI — ЕДИНСТВЕННЫЙ
+# источник в реестре, который бьёт ЧЕЛОВЕКУ (hil=True), и он читает журнал prize_watch,
+# чей крон закомментирован вместе с остановкой бота. Значит blocks==0 навсегда, и владелец
+# получал бы «призовых блоков за 24ч НЕТ» каждое утро вечно — про бота, который он сам
+# распорядился остановить. Ложная тревога дороже молчания: на неё перестают смотреть, а
+# вместе с ней и на настоящую. Гасим СУБЪЕКТ тем же маркером, что threads-watch и cu-quota;
+# строка в лог печатается (сторож не немой), человеку не уходит. Возврат — удаление файла.
+RETIRED = os.environ.get("KPI_RETIRED", "/home/claude-agent/.fleet-watch/RETIRED-liquidator-bot.md")
+if os.path.exists(RETIRED):
+    print("KPI не считается: юнит выведен из эксплуатации (маркер %s), "
+          "журнал prize_watch не наполняется — человеку не шлём" % RETIRED)
+    sys.exit(0)
 since = time.time() - 86400
 gaps, ahead, blocks, ours_in = [], [], 0, 0
 cur_ts = None
