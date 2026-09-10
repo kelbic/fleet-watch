@@ -80,7 +80,9 @@ if [ "$age" -gt "$limit" ]; then
     msg="💀 [midnight] executor: главный цикл молчит ${age}s (порог ${limit}s = проход ${base}s ×2 +120, режим ${mode:-?}) — завис. Cron-watchdog не поможет: процесс жив и держит flock."
   fi
   # АДРЕСАТ — АГЕНТ (03.08): снять залипший процесс и дать крону поднять — его работа.
-  /home/claude-agent/.fleet-watch/notify.sh midnight-deadman 0 "$msg" 3600 mn-dead > /dev/null
+  # 10.09.2026: hil=1 ВРЕМЕННО — инбокс агента мёртв (OAuth крон-тракта claude -p протух 01.09), midnight —
+  # единственный боевой бот перед окном 25.09; вернуть 0, когда agent-wake снова поднимает сессии.
+  /home/claude-agent/.fleet-watch/notify.sh midnight-deadman 1 "$msg" 3600 mn-dead > /dev/null
   touch "$STAMP"
 # else: НЕ трогаем STAMP. Раньше здесь был rm -f STAMP, и он стирал часовой дедуп на каждом
 # тике в конце прохода — соседние медленные проходы алертили заново (спам 22.07). Теперь штамп

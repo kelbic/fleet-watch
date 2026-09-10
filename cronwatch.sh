@@ -62,33 +62,51 @@ MIN_CMD_LINES=50       # меньше этого за окно = журнал п
 
 # имя|подстрока cron-команды|каденция, с
 REGISTRY=(
-  "deadman-wc|wc-bot/deadman.sh|600"
-  "deadman-katana|katana-bot/deadman.sh|600"
-  "deadman-hyperlend|hyperlend-bot/deadman.sh|600"
+  # ВЫВЕДЕНО 01.09: katana, wc, morpho-hl сняты с эксплуатации по решению kelbic (денег на
+  # столе нет — POSTMORTEM-liquidator-capital.md прил. 2, RETIRED-katana-wc-morphohl.md), их
+  # крон-строки закомментированы в тот же день. Надзор за задачей, которой намеренно нет,
+  # даёт ложную тревогу по построению. ВОЗВРАТ: раскомментировать вместе со строками crontab.
+  # "deadman-wc|wc-bot/deadman.sh|600"
+  # "deadman-katana|katana-bot/deadman.sh|600"
+  # ВЫВЕДЕНО 31.08: hyperlend снят с эксплуатации (гонка невыигрываема — см.
+  # RETIRED-hyperlend-bot.md), крон-строки закомментированы в тот же день.
+  # Надзор за задачей, которой намеренно нет, даёт растущую просрочку и ложную
+  # тревогу по построению. ВОЗВРАТ: раскомментировать вместе со строками crontab.
+  # "deadman-hyperlend|hyperlend-bot/deadman.sh|600"
   "deadman-midnight|midnight-bot/deadman.sh|600"
-  "blind-audit|fleet-watch/blind_audit.sh|86400"
+  # СНЯТО 10.09.2026 (ревью флота: субъект выведен/направление закрыто) "blind-audit|fleet-watch/blind_audit.sh|86400"
   "netwatch|fleet-watch/netwatch.sh|120"
   "target-watch|fleet-watch/target-watch.py|900"
-  "mglo-watch|chainwatch/mglo_watch.py|3600"
-  "sow-watch|chainwatch/sow_watch.py|21600"
-  "sow-watch-hl|morpho_sow_watch.lock|21600"
-  "disloc-watch|chainwatch/disloc_watch.py|120"
+  # СНЯТО 10.09.2026 (ревью флота: субъект выведен/направление закрыто) "mglo-watch|chainwatch/mglo_watch.py|3600"
+  # СНЯТО 10.09.2026 (ревью флота: субъект выведен/направление закрыто) "sow-watch|chainwatch/sow_watch.py|21600"
+  # "sow-watch-hl|morpho_sow_watch.lock|21600"
+  # СНЯТО 10.09.2026 (ревью флота: субъект выведен/направление закрыто) "disloc-watch|chainwatch/disloc_watch.py|120"
   "usde-watch|liquidator/state/usde_cron.sh|3600"
   "usde-hbcheck|liquidator/state/usde_hbcheck.sh|600"
   "cascade-facts|liquidator/state/cascade_facts_cron.sh|600"
-  "shadow-watch-katana|katana-probe/shadow_watch.py|900"
-  "route-canary|fleet-watch/route-canary.sh|21600"
-  "cu-quota|fleet-watch/cu-quota.sh|3600"
-  "threads-watch|fleet-watch/threads-watch.sh|300"
+  # "shadow-watch-katana|katana-probe/shadow_watch.py|900"
+  # ОТКЛЮЧЕНО 31.08: сама крон-задача route-canary закомментирована в тот же день
+  # (бот выведен из эксплуатации, алерты сняты по просьбе владельца — см.
+  # RETIRED-liquidator-bot.md). Надзор за задачей, которой намеренно нет, даёт
+  # растущую просрочку и ложную тревогу по построению: гасим СУБЪЕКТ, а не порог.
+  # ВОЗВРАТ: раскомментировать вместе со строкой в crontab, порог не менялся.
+  # "route-canary|fleet-watch/route-canary.sh|21600"
+  # СНЯТО 10.09.2026 (ревью флота: субъект выведен/направление закрыто) "cu-quota|fleet-watch/cu-quota.sh|3600"
+  # СНЯТО 10.09.2026 (ревью флота: субъект выведен/направление закрыто) "threads-watch|fleet-watch/threads-watch.sh|300"
   # 12.08: будильник разбора тревог 29 часов не поднимался (квота модели), и НАДЗОРА ЗА НИМ
   # НЕ БЫЛО — реестр покрывал сторожей, но не того, кто читает их тревоги. Он молчит в лог
   # при пустой очереди by design (agent-wake.py: `if not pending: return 0`), поэтому «жив»
   # и «не вызывается cron'ом» на диске неразличимы — ровно случай, ради которого этот скрипт
   # и берёт ВНЕШНЮЮ истину из journalctl.
   "agent-wake|fleet-watch/agent-wake.py|1200"
-  "exec-wc|wc-executor.lock|60"
-  "exec-katana|katana-executor.lock|60"
-  "exec-hyperlend|hyperlend-executor.lock|60"
+  "claude-auth-check|fleet-watch/claude-auth-check.sh|86400"
+  # "exec-wc|wc-executor.lock|60"
+  # "exec-katana|katana-executor.lock|60"
+  # ВЫВЕДЕНО 31.08: hyperlend снят с эксплуатации (гонка невыигрываема — см.
+  # RETIRED-hyperlend-bot.md), крон-строки закомментированы в тот же день.
+  # Надзор за задачей, которой намеренно нет, даёт растущую просрочку и ложную
+  # тревогу по построению. ВОЗВРАТ: раскомментировать вместе со строками crontab.
+  # "exec-hyperlend|hyperlend-executor.lock|60"
   "exec-midnight|midnight-executor.lock|60"
   "cronwatch|fleet-watch/cronwatch.sh|900"
 )

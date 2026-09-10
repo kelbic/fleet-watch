@@ -11,6 +11,7 @@ set -u
 TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' "$HOME/.claude/channels/telegram/.env" 2>/dev/null | cut -d= -f2-)
 CHAT="${MN_CHAT_ID:-265715923}"
 [ -n "$TOKEN" ] || exit 0
+EXPECTED=1   # 10.09.2026: в бою только midnight (hyperlend выведен 31.08; katana/wc/morpho-hl — 01.09)
 BOTS=0
 for p in $(pgrep -x python3 2>/dev/null); do
   case "$(readlink /proc/$p/cwd 2>/dev/null)" in *-liquidator) BOTS=$((BOTS+1));; esac
@@ -20,5 +21,5 @@ LOAD=$(cut -d' ' -f1-3 /proc/loadavg)
 DISK=$(df -h /home | awk 'NR==2{print $5}')
 curl -sm 15 "https://api.telegram.org/bot$TOKEN/sendMessage" \
   --data-urlencode "chat_id=$CHAT" \
-  --data-urlencode "text=💓 хост жив: ботов в бою $BOTS/4, аптайм $UP, load $LOAD, диск $DISK.
+  --data-urlencode "text=💓 хост жив: ботов в бою $BOTS/$EXPECTED, аптайм $UP, load $LOAD, диск $DISK.
 Это суточный маячок: ТИШИНА сутки = машина умерла, смотреть." > /dev/null
