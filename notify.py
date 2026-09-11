@@ -149,6 +149,27 @@ def _dedup_hit(key: str, ttl: float) -> bool:
     return hit
 
 
+def _dedup_release(key: str) -> None:
+    """Снять отметку дедупа: HIL не доставлен ⇒ следующий прогон обязан попробовать снова.
+    Иначе недоставленная тревога глушит СВОЙ состав на весь ttl (радар 25.09: 30 суток) —
+    «промолчал» и «не смог» становятся неразличимы (найдено 11.09 при перенацеливании)."""
+    if not key:
+        return
+    try:
+        st = json.load(open(DEDUP_STATE))
+    except Exception:  # noqa: BLE001
+        return
+    if key not in st:
+        return
+    st.pop(key, None)
+    tmp = DEDUP_STATE + ".tmp"
+    try:
+        json.dump(st, open(tmp, "w"))
+        os.replace(tmp, DEDUP_STATE)
+    except OSError:
+        pass
+
+
 def notify(text: str, *, source: str, hil: bool = False, key: str = "",
            dedup_sec: float = 0.0, selftest: bool = False) -> str:
     """Единственная точка отправки тревог. Возвращает адресата: tg|inbox|dedup|muted|selftest.
@@ -217,6 +238,10 @@ def notify(text: str, *, source: str, hil: bool = False, key: str = "",
                                    ensure_ascii=False) + "\n")
         except OSError as e:
             _log(f"notify[{source}]: tg-надгробие не записано: {e}")
+    else:
+        # Отметка дедупа легла ДО отправки; недоставленный HIL не должен глушить повтор.
+        _dedup_release(key)
+        _log(f"notify[{source}]: ДОСТАВКА НЕ ПОДТВЕРЖДЕНА — дедуп ({key}) снят, повтор разрешён")
     return "tg" if ok else "inbox"
 
 
