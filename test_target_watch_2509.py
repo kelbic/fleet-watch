@@ -278,6 +278,78 @@ n2 = run(eth=50_000_000_000_000_000)
 n3 = run(eth=50_000_000_000_000_000, auth_logs=[auth_event(KIT, HUB)])
 check("новый повод проходит защёлку", (n1, n2, n3) == (1, 0, 1), f"{n1},{n2},{n3}")
 
+# --- 6а. ПРЕДВЗВОД (ветка 4) ----------------------------------------------------------
+# Ветка живёт только внутри окна T−2ч…maturity+2ч, то есть в боевом прогоне 11.09 она не
+# исполняется ВОВСЕ. Непроверенная ветка на денежном пути — это сторож, про который мы
+# узнаем 25.09 в 13:00Z, работает ли он ([[dead-watchdog-worse-than-none]]: «всё тихо»
+# требует ПОЛОЖИТЕЛЬНОГО доказательства). Поэтому время и состояние бота подменяются, а
+# сама ветка исполняется настоящая.
+import time as _time
+
+_EXEC_STATE = os.path.join(_TMP, "exec_state.json")
+_EXEC_LOG = os.path.join(_TMP, "executor.log")
+tw.EXEC_STATE, tw.EXEC_LOG = _EXEC_STATE, _EXEC_LOG
+
+
+def _bot(*, in_registry=True, hot=21, consec=0, gas=0.0):
+    json.dump({"borrowers": {MKT: ([KIT] if in_registry else []) + ["0x" + "11" * 20]},
+               "bwr_block": 51_200_000, "consec_reverts": consec, "gas_usd": gas,
+               "last_now": int(_time.time())}, open(_EXEC_STATE, "w"))
+    open(_EXEC_LOG, "w").write(f"[sched 14:59:00] HOT/HOT hot={hot} целей=0 за 0с\n")
+
+
+def _at(dt_sec):
+    """Сдвинуть maturity так, чтобы до окна осталось ровно dt_sec."""
+    tw.MATURITY = int(_time.time()) + dt_sec
+
+
+_ORIG_MATURITY = tw.MATURITY
+
+# T−2ч, всё в порядке: реестр знает кита ⇒ тишина (и предел прибора назван в логе)
+reset_state(); _at(2 * 3600); _bot(); run()
+n = run()
+check("предвзвод T−2ч в норме: тихо", n == 0, f"ушло {n}")
+check("предвзвод называет предел прибора",
+      any("охоту это не доказывает" in m for m in LOGGED), str(LOGGED)[:300])
+
+# Кита НЕТ в реестре живого бота — ровно тот отказ, ради которого ветка и заведена
+reset_state(); _bot(in_registry=False)
+n = run()          # поводы предвзвода переживают базлайн ⇒ звонит ПЕРВЫЙ прогон
+check("кита нет в реестре бота: ровно одно сообщение", n == 1, f"ушло {n}")
+check("повтор того же предвзвода — НОЛЬ (защёлка состава)", run() == 0)
+check("предвзвод не выдаёт реестр за охоту",
+      "НЕ доказывает" in json.loads(open(MUTED).readlines()[-1])["text"])
+
+# hot=0 внутри предвзвода (T−10м): доказательство, что не вошёл НИКТО
+reset_state(); _at(600); _bot(hot=0)
+n = run()
+check("hot=0 в предвзводе: ровно одно сообщение", n == 1, f"ушло {n}")
+# НЕГАТИВНЫЙ КОНТРОЛЬ: hot>0 про кита не доказывает ничего ⇒ молчит
+reset_state(); _bot(hot=21)
+n = run()
+check("hot>0 в предвзводе молчит", n == 0, f"ушло {n}")
+
+# Взведённый гард бота = HIL-критерий №2 (боевой огонь остановлен)
+reset_state(); _at(3600); _bot(consec=3)
+n = run()
+check("взведённый гард бота: ровно одно сообщение", n == 1, f"ушло {n}")
+
+# Битый exec_state (бот писал его в этот момент) — В ЛОГ, без алерта: сбой чтения не есть
+# наблюдение о боте ([[red-bench-is-not-a-diagnosis]]).
+reset_state(); _bot()
+open(_EXEC_STATE, "w").write("{неполный js")
+n = run()
+check("битый exec_state НЕ будит", n == 0, f"ушло {n}")
+check("битый exec_state записан в лог",
+      any("не прочитан" in m for m in LOGGED), str(LOGGED)[:200])
+
+# ГРАНИЦА: за пределами окна ветка молчит даже при полном отсутствии реестра
+reset_state(); _at(3 * 3600); _bot(in_registry=False)
+n = run()
+check("вне окна T−2ч предвзвод не исполняется", n == 0, f"ушло {n}")
+
+tw.MATURITY = _ORIG_MATURITY
+
 # --- 7. БОЕВОЙ КАНАЛ НЕ ТРОНУТ --------------------------------------------------------
 check("боевой инбокс не тронут", not os.path.exists(
     os.path.expanduser("~/.fleet-watch/agent-inbox.jsonl.TESTMARK")))
