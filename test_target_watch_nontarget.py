@@ -29,10 +29,38 @@ tw = importlib.import_module("target-watch".replace("-", "_")) if False else Non
 # файл с дефисом в имени — грузим по пути
 import importlib.util
 
-_spec = importlib.util.spec_from_file_location(
-    "target_watch", os.path.join(os.path.dirname(os.path.abspath(__file__)), "target-watch.py"))
+# Путь скрипта переопределяем (11.09): перед боевой заменой стенд обязан гоняться по
+# КАНДИДАТУ, иначе он зелен по старому файлу и о новом не говорит ничего. Умолчание —
+# боевой файл, поэтому забыть переменную безопасно.
+_SCRIPT = os.environ.get("MN_WATCH_SCRIPT") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "target-watch.py")
+_spec = importlib.util.spec_from_file_location("target_watch", _SCRIPT)
 tw = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(tw)
+
+# ЦЕЛИ СТЕНДА — СВОИ, А НЕ БОЕВЫЕ (11.09). Радар перенацелен на окно 25.09, и трёх целей
+# 27.08/28.08 в бою больше нет. Но проверяемый здесь МЕХАНИЗМ (гейт по направлению у
+# нецелевой позиции, одноразовость звонка при обнулении, допуск на крошку) жив и стоит на
+# денежном пути — вывод субъекта не должен убивать его покрытие
+# ([[retired-subject-needs-watchdog-sweep]]). Поэтому фикстура инцидента 13.08 переезжает
+# в сам стенд: регрессия остаётся проверяемой, а боевой список целей её не тащит.
+tw.TARGETS = [
+    {"name": "кит-1 27.08 ~$399k (фикстура стенда)",
+     "market": "0xf27319855df886a604dda3d5675007f0aa6eee504c99f1d789c86b21075f7c20",
+     "borrower": "0xfb94d3404c1d3d9d6f08f79e58041d5ea95accfa",
+     "maturity": 1787788800, "loan_dec": 6, "coll_dec": 18, "coll": "WETH",
+     "coll_move_pct": 0.0, "coll_move_dust": 10 ** 15},
+    {"name": "кит-2 27.08 ~$314k (гейт закрыт, не цель) (фикстура стенда)",
+     "market": "0x44495af1cca7842191a65a73978e01ed72238731e193c3b11460083efd60a318",
+     "borrower": "0xd75ffb585ff88d3aa50b7cf9230b27a7eb923c20",
+     "maturity": 1787788800, "loan_dec": 6, "coll_dec": 18, "coll": "cbBTC-USDC-collat",
+     "not_target": True},
+    {"name": "кит 28.08 ~$100k cbBTC (роллер 31.07) (фикстура стенда)",
+     "market": "0x05959752fdeff325962b9d263edb421efc6e2186a49360dba6c32e86ebf6c84c",
+     "borrower": "0xd418224ae3c510b645112fd9275ccfd50f996ee4",
+     "maturity": 1787929200, "loan_dec": 6, "coll_dec": 8, "coll": "cbBTC",
+     "coll_move_pct": 0.0},
+]
 
 K1, K2 = 0, 1                               # индексы целей: кит-1 (цель), кит-2 (не цель)
 # Числа инцидента 13.08 (сверены eth_call на цепи, tx 0xb5504f3d…, блок 49934571)
@@ -62,6 +90,10 @@ def _install(chain: dict):
                 return slots.get(int(data[10 + len(tail):], 16), 0)
         raise AssertionError(f"неожиданный вызов {sel}")
     tw.call = fake_call
+    # 11.09: ветки копят поводы через alert(); отправка одна на прогон. Шпион — на новой
+    # точке, но MN_WATCH_MUTE=1 выше остаётся вторым контуром: промах шпиона не ударит
+    # в живой инбокс ([[tests-never-touch-production-channels]]).
+    tw.alert = lambda text, **kw: SENT.append(text)
     tw.notify = lambda text, **kw: SENT.append(text)
     tw.log = lambda msg: LOGGED.append(msg)
 

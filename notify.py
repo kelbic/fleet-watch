@@ -51,7 +51,14 @@ INBOX = os.environ.get("FLEET_INBOX", os.path.join(WATCH_DIR, "agent-inbox.jsonl
 # прибивается путём: иначе тест с FLEET_INBOX=<временный> писал бы в боевой архив.
 HANDLED_ARCHIVE = (INBOX[:-len(".jsonl")] if INBOX.endswith(".jsonl") else INBOX) + ".handled.jsonl"
 SELFTEST_SUFFIX = ":selftest"
-DEDUP_STATE = os.path.join(WATCH_DIR, "notify-dedup.json")
+# ДЕДУП-СОСТОЯНИЕ — ПЕРЕОПРЕДЕЛЯЕМО ИЗ ОКРУЖЕНИЯ (11.09). Замутить транспорт НЕДОСТАТОЧНО:
+# _dedup_hit() пишет ключ в ЭТОТ файл ещё до всякой отправки, и стенд, гоняющий защёлку,
+# засевал бы БОЕВЫЕ ключи — то есть глушил бы настоящую тревогу того же состава на весь
+# TTL. Ровно та же НЕ-КАНАЛЬНАЯ дверь, что 27.08 у target-watch (сторож стоял на отправке,
+# а состояние осталось голым и снесло защёлки gone_*), только с обратным знаком: не стенд
+# теряет защёлку, а бой её получает. Дверь закрыта у самого пути
+# ([[tests-never-touch-production-channels]]: границу держит транспорт, а не дисциплина).
+DEDUP_STATE = os.environ.get("FLEET_DEDUP_STATE") or os.path.join(WATCH_DIR, "notify-dedup.json")
 LOG_FILE = os.path.join(WATCH_DIR, "notify.log")
 TG_ENV = os.path.expanduser("~/.claude/channels/telegram/.env")
 CHAT_ID = os.environ.get("MN_CHAT_ID", "265715923")

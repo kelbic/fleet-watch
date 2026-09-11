@@ -26,8 +26,12 @@ os.environ["MN_WATCH_STATE"] = os.path.join(
     tempfile.mkdtemp(prefix="tw-state-"), "target-watch.json")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-_spec = importlib.util.spec_from_file_location(
-    "tw_fg", os.path.join(os.path.dirname(os.path.abspath(__file__)), "target-watch.py"))
+# Путь скрипта переопределяем (11.09): перед боевой заменой стенд обязан гоняться по
+# КАНДИДАТУ, иначе он зелен по старому файлу и о новом не говорит ничего. Умолчание —
+# боевой файл, поэтому забыть переменную безопасно.
+_SCRIPT = os.environ.get("MN_WATCH_SCRIPT") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "target-watch.py")
+_spec = importlib.util.spec_from_file_location("tw_fg", _SCRIPT)
 tw = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(tw)
 
@@ -55,8 +59,12 @@ def _run(events, prev, price=PRICE_1USD):
     tw.foreign_liquidations = lambda a, b: list(events)
     tw.rpc = lambda m, p: (hex(price) if m == "eth_call" else
                            (hex(50500700) if m == "eth_blockNumber" else "0x0"))
+    # 11.09: точка отправки переехала — ветки больше не зовут notify()/tg() напрямую,
+    # они КОПЯТ поводы через alert(), и отправка одна на прогон (flush_reasons).
+    # Шпион переставлен на новую точку; сам гейт (приз vs пол, базлайн) исполняется
+    # настоящий — шов как был на RPC и на источнике событий, а не над разбираемой веткой.
+    tw.alert = lambda text, **kw: sent.append(text)
     tw.notify = lambda text, **kw: sent.append(text)
-    tw.tg = lambda text, **kw: sent.append(text)
     tw.log = lambda msg: logged.append(msg)
     tw._scan_foreign(prev, dict(prev), "27.08 00:30Z", 50500700)
     return sent, logged
