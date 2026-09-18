@@ -189,6 +189,7 @@ trap finish EXIT
 # ── САМОПРОВЕРКА ────────────────────────────────────────────────────────────────
 if [ "${1:-}" = "selftest" ]; then
   export CW_MUTE=1                      # мьют на транспорте, форсированно
+  SELF="$(/usr/bin/readlink -f /bin/bash "$SELF")"   # под пустым PATH «$0» без слэша не исполняется (127)
   fails=0
   prod_state=$(cat "$DIR/cronwatch.state" 2>/dev/null)   # снимок ДО тестов, сверяется после
   t() { # $1=имя $2=ожидаемый код $3...=команда
@@ -202,7 +203,7 @@ if [ "${1:-}" = "selftest" ]; then
   sand=$(mktemp -d)                     # песочница: боевые log/state/stamp НЕ трогаем
   SLOG=$sand/log; SSTATE=$sand/state; SSTAMP=$sand/stamp
   probe() { env PATH="$empty" CW_MUTE=1 CW_DIR="$sand" CW_LOG="$SLOG" \
-                CW_STATE="$SSTATE" CW_STAMP="$SSTAMP" /bin/bash "$(/usr/bin/readlink -f "$0")" _blindprobe; }
+                CW_STATE="$SSTATE" CW_STAMP="$SSTAMP" /bin/bash "$SELF" _blindprobe; }
   # 1) слепота обязана дать код 1, а НЕ 0 — регрессия бага 28.07
   rm -f "$SSTAMP"
   t "слепой путь (нет journalctl), штамп снят"  1 probe
@@ -230,7 +231,7 @@ if [ "${1:-}" = "selftest" ]; then
     echo "  ПРОПУСК гарда первой встречи: журнал дал $fixlines строк (<$MIN_CMD_LINES) — фикстуру не построить"
   else
     gprobe() { env CW_MUTE=1 CW_DIR="$sand" CW_LOG="$SLOG" CW_STATE="$SSTATE" \
-                   CW_STAMP="$SSTAMP" CW_SEEN="$1" CW_SNAP_FILE="$fix" "$0"; }
+                   CW_STAMP="$SSTAMP" CW_SEEN="$1" CW_SNAP_FILE="$fix" /bin/bash "$SELF"; }
     # (а) задача ТОЛЬКО ЧТО в реестре -> пустота в журнале НЕ является смертью -> код 0
     printf 'agent-wake|%s\n' "$now" > "$sand/seen_new"
     rm -f "$SSTAMP"
