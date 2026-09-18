@@ -105,6 +105,8 @@ REGISTRY=(
   # вызывает» на диске неразличимы — ровно причина существования этого реестра.
   "term-watch|fleet-watch/term-watch.py|86400"
   "midnight-chains|fleet-watch/midnight-chains-watch.py|86400"
+  # 18.09.2026: суточный сторож выхода залога Term (Fluid/Kyber), доля бонуса после выхода.
+  "term-route-watch|term-liquidator/ops/route_watch.py|86400"
   # "exec-wc|wc-executor.lock|60"
   # "exec-katana|katana-executor.lock|60"
   # ВЫВЕДЕНО 31.08: hyperlend снят с эксплуатации (гонка невыигрываема — см.
@@ -200,7 +202,7 @@ if [ "${1:-}" = "selftest" ]; then
   sand=$(mktemp -d)                     # песочница: боевые log/state/stamp НЕ трогаем
   SLOG=$sand/log; SSTATE=$sand/state; SSTAMP=$sand/stamp
   probe() { env PATH="$empty" CW_MUTE=1 CW_DIR="$sand" CW_LOG="$SLOG" \
-                CW_STATE="$SSTATE" CW_STAMP="$SSTAMP" "$0" _blindprobe; }
+                CW_STATE="$SSTATE" CW_STAMP="$SSTAMP" /bin/bash "$(/usr/bin/readlink -f "$0")" _blindprobe; }
   # 1) слепота обязана дать код 1, а НЕ 0 — регрессия бага 28.07
   rm -f "$SSTAMP"
   t "слепой путь (нет journalctl), штамп снят"  1 probe
