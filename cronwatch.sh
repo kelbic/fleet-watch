@@ -100,6 +100,11 @@ REGISTRY=(
   # и берёт ВНЕШНЮЮ истину из journalctl.
   "agent-wake|fleet-watch/agent-wake.py|1200"
   "claude-auth-check|fleet-watch/claude-auth-check.sh|86400"
+  # 18.09.2026: два суточных сторожа по находке TERM-GATE-2026-09-18 (окно Term 11.12 и
+  # книга Midnight вне Base). Оба молчат при здоровье ⇒ без надзора «жив» и «cron не
+  # вызывает» на диске неразличимы — ровно причина существования этого реестра.
+  "term-watch|fleet-watch/term-watch.py|86400"
+  "midnight-chains|fleet-watch/midnight-chains-watch.py|86400"
   # "exec-wc|wc-executor.lock|60"
   # "exec-katana|katana-executor.lock|60"
   # ВЫВЕДЕНО 31.08: hyperlend снят с эксплуатации (гонка невыигрываема — см.
@@ -210,8 +215,14 @@ if [ "${1:-}" = "selftest" ]; then
   # Фикстура — НАСТОЯЩИЙ журнал без строк одной задачи: мир, где она не запускалась ни разу.
   prod_seen=$(cat "$DIR/cronwatch.seen" 2>/dev/null)
   fix=$sand/snap
+  # ЗОНД ФИКСТУРЫ ОБЯЗАН БЫТЬ В РЕЕСТРЕ. До 18.09 здесь стоял cu-quota — его сняли из
+  # реестра ревью флота 10.09 и НЕ тронули стенд. С этого дня ветка «старая задача не
+  # запускалась = смерть» проверялась на задаче, которой в реестре нет: тревоги нет по
+  # построению, тест падал, и единственная проверка, ловящая «cron перестал звать
+  # сторожа», стояла мёртвой 8 суток. Ровно [[retired-subject-needs-watchdog-sweep]]:
+  # вывод субъекта не глушит сторожа, а убивает его специфичность.
   journalctl -u cron --since "-13h" --no-pager -o short-unix 2>/dev/null \
-    | grep 'CMD (' 2>/dev/null | grep -v 'fleet-watch/cu-quota.sh' > "$fix" 2>/dev/null
+    | grep 'CMD (' 2>/dev/null | grep -v 'fleet-watch/agent-wake.py' > "$fix" 2>/dev/null
   fixlines=$(grep -c 'CMD (' "$fix" 2>/dev/null); case "$fixlines" in (''|*[!0-9]*) fixlines=0 ;; esac
   if [ "$fixlines" -lt "$MIN_CMD_LINES" ]; then
     echo "  ПРОПУСК гарда первой встречи: журнал дал $fixlines строк (<$MIN_CMD_LINES) — фикстуру не построить"
@@ -219,11 +230,11 @@ if [ "${1:-}" = "selftest" ]; then
     gprobe() { env CW_MUTE=1 CW_DIR="$sand" CW_LOG="$SLOG" CW_STATE="$SSTATE" \
                    CW_STAMP="$SSTAMP" CW_SEEN="$1" CW_SNAP_FILE="$fix" "$0"; }
     # (а) задача ТОЛЬКО ЧТО в реестре -> пустота в журнале НЕ является смертью -> код 0
-    printf 'cu-quota|%s\n' "$now" > "$sand/seen_new"
+    printf 'agent-wake|%s\n' "$now" > "$sand/seen_new"
     rm -f "$SSTAMP"
     t "новая задача без запусков — НЕ тревога"   0 gprobe "$sand/seen_new"
     # (б) та же пустота у задачи, известной сутки -> это смерть -> код 2
-    printf 'cu-quota|%s\n' "$(( now - 86400 ))" > "$sand/seen_old"
+    printf 'agent-wake|%s\n' "$(( now - 86400 ))" > "$sand/seen_old"
     rm -f "$SSTAMP"
     t "старая задача без запусков — ТРЕВОГА"     2 gprobe "$sand/seen_old"
   fi
