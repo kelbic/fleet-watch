@@ -63,6 +63,17 @@ def main():
     out, al = run("term-watch.py", patch={"TERM_WATCH_BASE_ADD": "200000"})
     fails += not ok("term: тревога на падении долга", "term-watch:debt-drop" in al, f"{al}")
 
+    # 2б. term-watch: ветка РОЛЛА. На цепи сейчас ролла нет, поэтому «заявлен» не
+    #     воспроизвести без tx; воспроизводим ОБРАТНЫЙ переход тем же сравнением —
+    #     сеем прошлое состояние с роллом и требуем тревогу «отозван». Это доказывает,
+    #     что геттер читается, сравнение живо и notify доходит.
+    out, al = run("term-watch.py", {"rolls": {b: {"amount": 1_000_000.0, "bidLocker": "0x1",
+                                                 "processed": False} for b in
+                                              ("0x3976747b82316020a15662761c82860b9785e7f3",)}})
+    fails += not ok("term: ветка ролла жива (переход по состоянию)",
+                    "term-watch:rollover-cancelled" in al, f"{al}")
+    fails += not ok("term: ролл прочитан по цепи", "ролл=нет" in out, out[-120:])
+
     # 3. term-watch: мёртвый узел = ТРЕВОГА, а не тишина
     out, al = run("term-watch.py", patch={"TERM_WATCH_FORCE_RPC": "1"})
     #   (подменяем список узлов через окружение — см. ниже правку сторожа)

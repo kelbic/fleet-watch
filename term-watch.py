@@ -64,7 +64,7 @@ PREFLIGHT_DAYS = 14
 
 SEL_OBLIG = "0x2762697d"    # getBorrowerRepurchaseObligation(address)
 SEL_TOTAL = "0x9d5d2108"    # totalOutstandingRepurchaseExposure()
-SEL_COLL = "0x7a7ebd7b"     # getCollateralBalance(address,address) — пересчитан ниже
+SEL_ROLL = "0x34e6c771"     # getRolloverInstructions(address) -> (bidLocker, amount, hash, processed)
 UA = {"content-type": "application/json", "user-agent": "fleet term-watch"}
 
 
@@ -85,6 +85,14 @@ def rpc(method, params, timeout=25):
 
 def call_u(to, data):
     return int(rpc("eth_call", [{"to": to, "data": data}, "latest"]), 16)
+
+
+def call_words(to, data, n):
+    """Сырые слова ответа. Короткий/пустой ответ = прибор, а не пустое состояние."""
+    r = rpc("eth_call", [{"to": to, "data": data}, "latest"]).replace("0x", "")
+    if len(r) < n * 64:
+        raise RuntimeError(f"ответ короче {n} слов ({len(r)//2} B) — геттер не тот или узел врёт")
+    return [int(r[i * 64:(i + 1) * 64], 16) for i in range(n)]
 
 
 def ea(a):
@@ -178,6 +186,31 @@ def main():
               f"TERM-GATE-2026-09-18 окно 11.12 снимается с рассмотрения.",
               "term-watch:below-floor")
 
+    # ---- РОЛЛ: СОСТОЯНИЕ, А НЕ ИСТОРИЯ.
+    # Кита Midnight 27.08 увели РОЛЛОМ за 9.85 ч до срока, и увидеть это по падению
+    # долга нельзя: election — намерение, долг гасится только в момент maturity.
+    # Читаем намерение прямо ([[log-line-set-is-union-over-time]]: набор событий за
+    # время ≠ снимок состояния). Реверт/короткий ответ = ПРИБОР, а не «ролла нет»:
+    # контроль 18.09 — тот же вызов с 0xdEaD отдаёт нули, значит нули тут настоящие.
+    rolls = {}
+    try:
+        for b in SUBJECTS:
+            w = call_words(ROLLOVER_MGR, SEL_ROLL + ea(b), 4)
+            rolls[b] = {"bidLocker": hex(w[0]), "amount": w[1] / 1e6, "processed": bool(w[3])}
+    except Exception as e:
+        alarm(f"ролл-геттер не читается: {str(e)[:130]}", "term-watch:rollover-dead")
+    for b, r in rolls.items():
+        was = (prev.get("rolls") or {}).get(b, {}).get("amount", 0.0)
+        if r["amount"] > 0 and was <= 0:
+            alarm(f"РОЛЛ ЗАЯВЛЕН: {b[:10]}… роллирует ${r['amount']:,.0f} "
+                  f"(bidLocker {r['bidLocker'][:12]}…, processed={r['processed']}). "
+                  f"Ровно так у нас увели кита Midnight 27.08 за 9.85 ч до срока: долг "
+                  f"до самого maturity выглядит целым. До окна {left:.1f} сут.",
+                  "term-watch:rollover-elected")
+        elif r["amount"] <= 0 < was:
+            alarm(f"РОЛЛ ОТОЗВАН: {b[:10]}… (было ${was:,.0f}) — цель вернулась.",
+                  "term-watch:rollover-cancelled")
+
     # ---- ПРЕФЛАЙТ T−14д: выход мерян 18.09, окно 11.12 — число обязано быть перемерено
     exit_rate = prev.get("exit_rate")
     if 0 < left <= PREFLIGHT_DAYS:
@@ -194,6 +227,7 @@ def main():
             alarm(f"префлайт выхода не отработал: {str(e)[:120]}", "term-watch:exit-quote-dead")
 
     json.dump({"ts": now, "head": head, "total": total, "obligations": obligations,
+               "rolls": rolls,
                "low": {b: min(obligations[b], prev.get("low", {}).get(b, obligations[b]))
                        for b in SUBJECTS},
                "below_floor": total < FLOOR_TOTAL, "closed": False,
@@ -201,6 +235,7 @@ def main():
                "consistent": consistent}, open(STATE, "w"))
     log(f"OK блок {head} книга ${total:,.2f} "
         + " ".join(f"{b[:8]}=${v:,.0f}" for b, v in obligations.items())
+        + f" ролл={'нет' if all(r['amount'] <= 0 for r in rolls.values()) else 'ЕСТЬ'}"
         + f" тождество={'сошлось' if consistent else 'РАСХОЖДЕНИЕ'} до окна {left:.1f} сут")
     return 0
 
