@@ -395,6 +395,23 @@ def main():
             return 1
         log(f"ликвидаций за месяц 0, но за год {y} — пустой месяц настоящий")
 
+    # РУЧКА СТЕНДА: общий множитель на все денежные величины. Существует потому, что
+    # защёлка обязана держать МЕСЯЦ, а между месячными прогонами каждое число дрейфует
+    # (проценты капают). Стенд без дрейфа гоняет два прогона по одному и тому же снимку
+    # API и зелен по построению — он проверял бы не свойство, а скорость
+    # ([[test-that-can-only-return-zero]], [[red-bench-is-not-a-diagnosis]]).
+    if BENCH and os.environ.get("WC_BOOK_DRIFT"):
+        _k = 1.0 + float(os.environ["WC_BOOK_DRIFT"])
+        for _r in rows:
+            _r["borrowUsd"] *= _k
+        for _b in buckets:
+            buckets[_b] *= _k
+        total *= _k
+        for _x in plist:                       # top_pos/top_vol_pos/biggest — те же объекты
+            _x["debtUsd"] *= _k
+        liq_sum *= _k
+        log(f"РУЧКА СТЕНДА: дрейф денежных величин ×{_k}")
+
     # ── 4. ЗАЩЁЛКИ И ТРЕВОГИ ─────────────────────────────────────────────────────
     prev_latch = dict(prev.get("latch") or {})      # СНИМОК: читаем отсюда, пишем в latch
     latch = dict(prev_latch)
@@ -415,8 +432,13 @@ def main():
         latch[name] = {"on": bool(is_hot), "compo": compo if is_hot else "", "ts": now}
         return bool(is_hot) and ((not was) or compo != was_compo)
 
-    vol_compo = "|".join(f"{r['pair']}:{r['borrowUsd']:.0f}"
-                         for r in rows if r["kind"] == "volatile" and r["borrowUsd"] >= 1e6)
+    # СОСТАВ КВАНТУЕТСЯ. Точные доллары в составе означали бы «состав сменился» КАЖДЫЙ
+    # месяц (проценты капают ежесекундно), и защёлка, обещающая молчать на неизменном
+    # состоянии, звонила бы всегда. Состав = НАБОР волатильных рынков крупнее $1M плюс
+    # шаг $5M по самому долгу: меняется на появлении/уходе рынка и на заметном росте.
+    vol_compo = ("|".join(sorted(r["pair"] for r in rows
+                                 if r["kind"] == "volatile" and r["borrowUsd"] >= 1e6))
+                 + f"#{round(vol / 5e6)}")
     if edge("vol_debt", hot("vol_debt", vol, VOL_DEBT_ALARM), vol_compo):
         fired.append(("wc-book:volatile-debt", vol_compo,
                       f"ВОЛАТИЛЬНЫЙ ДОЛГ ${vol:,.0f} ≥ порога ${VOL_DEBT_ALARM:,.0f} "
@@ -442,7 +464,9 @@ def main():
     liq_hot = (liq_n >= (LIQ_N_ALARM * REARM if (prev_latch.get("liq_flow") or {}).get("on")
                          else LIQ_N_ALARM)
                and hot("liq_flow", liq_sum, LIQ_USD_ALARM))
-    liq_compo = f"{liq_n // 100}|{round(liq_sum / 25_000)}"
+    # Шаг по штукам — 500, а не 100: счётчик набивается пылью (1469 шт при 8 непылевых)
+    # и границу в 100 пересекал бы почти каждый месяц, разваливая защёлку.
+    liq_compo = f"{liq_n // 500}|{round(liq_sum / 25_000)}"
     if edge("liq_flow", liq_hot, liq_compo):
         fired.append(("wc-book:liq-flow", liq_compo,
                       f"ПОТОК ЛИКВИДАЦИЙ: {liq_n} шт за {WINDOW_DAYS} сут на "
@@ -493,9 +517,13 @@ def main():
     d_tot = total - BASE["total"]
     d_vol = buckets["volatile"] - BASE["volatile"]
     def _pline(x):
+        # healthFactor у API nullable. Падение на ФОРМАТИРОВАНИИ последней строки стоило бы
+        # всей строки census (state и JSONL уже записаны, а в cron.log лёг бы traceback).
+        h = x["hf_api"]
         return (f"{x['user'][:12]}… {x['pair']} ${x['debtUsd']:,.0f} "
-                f"HF-API={x['hf_api']:.4f}"
-                + (" залог-без-цены" if x["coll_unpriced"] else ""))
+                f"HF-API={h:.4f}" if isinstance(h, (int, float)) else
+                f"{x['user'][:12]}… {x['pair']} ${x['debtUsd']:,.0f} HF-API=n/a") + (
+                " залог-без-цены" if x["coll_unpriced"] else "")
     log(f"OK книга ${total:,.0f} ({d_tot:+,.0f} к {BASE['date']}) | "
         f"стейбл/стейбл ${buckets['stable']:,.0f} | ВОЛАТИЛЬНЫЙ ${vol:,.0f} ({d_vol:+,.0f}) | "
         f"рынков {len(items)} непроценено {len(unpriced)} | "

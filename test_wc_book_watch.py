@@ -88,14 +88,22 @@ def main():
     fails += not ok("много штук без суммы — молчит (И, не ИЛИ)",
                     not has(al, "wc-book:liq-flow"), f"{al}")
 
-    # 6. ЗАЩЁЛКА: тот же пробитый порог во ВТОРОЙ раз молчит...
-    out, al, d = run({**B, "WC_BOOK_VOL_ALARM": "1000000"})
-    first = has(al, "wc-book:volatile-debt")
-    out2, al2, _ = run({**B, "WC_BOOK_VOL_ALARM": "1000000"}, workdir=d)
+    # 6. ЗАЩЁЛКА ДЕРЖИТ МЕСЯЦ, А НЕ СЕКУНДУ. Два прогона по ОДНОМУ снимку API зелены по
+    #    построению: между настоящими месячными прогонами каждое число дрейфует (проценты
+    #    капают), и защёлка, чей состав собран из точных долларов, звонила бы каждый месяц.
+    #    Поэтому второй прогон идёт с ДРЕЙФОМ +2% по всем денежным величинам и обязан
+    #    молчать по ВСЕМ ТРЁМ порогам ([[red-bench-is-not-a-diagnosis]]).
+    LOW = {**B, "WC_BOOK_VOL_ALARM": "1000000", "WC_BOOK_POS_ALARM": "100000",
+           "WC_BOOK_LIQ_N": "10", "WC_BOOK_LIQ_USD": "1000"}
+    out, al, d = run(LOW)
+    first3 = all(has(al, k) for k in ("wc-book:volatile-debt", "wc-book:big-position",
+                                      "wc-book:liq-flow"))
+    out2, al2, _ = run({**LOW, "WC_BOOK_DRIFT": "0.02"}, workdir=d)
     second = al2[len(al):]      # инбокс append-only: НОВЫЕ записи — это хвост, а не разность
                                 # множеств (повтор того же ключа разностью не виден)
-    fails += not ok("защёлка: повтор того же состояния молчит", first and not second,
-                    f"1={al} 2={al2}")
+    fails += not ok("защёлка: то же состояние с дрейфом +2% молчит по всем трём",
+                    first3 and not second, f"1={al} новые2={second}")
+    fails += not ok("дрейф стенда действительно применён", "дрейф денежных величин" in out2)
 
     # 6б. ...и ПЕРЕВЗВОДИТСЯ, когда значение вернулось под порог
     out3, al3, _ = run({**B, "WC_BOOK_VOL_ALARM": "999000000"}, workdir=d)   # ниже порога
@@ -103,6 +111,12 @@ def main():
     new4 = al4[len(al3):]
     fails += not ok("защёлка перевзводится после возврата под порог",
                     has(new4, "wc-book:volatile-debt"), f"3={al3} 4={al4}")
+
+    # 6в. СМЕНА СОСТАВА обязана звонить сквозь защёлку: дрейф +80% двигает и набор
+    #     рынков ≥$1M, и шаг $5M по долгу — это уже ДРУГАЯ книга, а не тот же месяц.
+    out5, al5, _ = run({**LOW, "WC_BOOK_DRIFT": "0.8"}, workdir=d)
+    fails += not ok("смена состава звонит сквозь защёлку",
+                    has(al5[len(al4):], "wc-book:volatile-debt"), f"новые={al5[len(al4):]}")
 
     # 7. МЁРТВЫЙ ПРИБОР = ТРЕВОГА, а не «книга пуста»
     out, al, _ = run({"WC_BOOK_API": "http://127.0.0.1:1/dead"})
