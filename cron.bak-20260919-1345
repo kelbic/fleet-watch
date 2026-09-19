@@ -1,0 +1,89 @@
+# СНЯТО 10.09.2026 по решению kelbic (исследовательские кроны monad-liquidator; выходы в data/ сохранены; вернуть — снять комментарий): 17 */3 * * * flock -n /tmp/aave_watch.lock timeout 1800 env PYTHONPATH=/home/claude-agent/work/monad-liquidator python3 -m analysis.aave_watch > /dev/null 2>> /home/claude-agent/work/monad-liquidator/data/aave_watch_cron.log
+# СНЯТО 10.09.2026 по решению kelbic (исследовательские кроны monad-liquidator; выходы в data/ сохранены; вернуть — снять комментарий): */15 * * * * flock -n /tmp/morpho_paper.lock timeout 600 env PYTHONPATH=/home/claude-agent/work/monad-liquidator python3 -m analysis.morpho_paper > /dev/null 2>> /home/claude-agent/work/monad-liquidator/data/morpho_paper_cron.log
+# СНЯТО 10.09.2026 по решению kelbic (исследовательские кроны monad-liquidator; выходы в data/ сохранены; вернуть — снять комментарий): */10 * * * * flock -n /tmp/shadow_race.lock env PYTHONPATH=/home/claude-agent/work/monad-liquidator python3 -m analysis.shadow_race > /dev/null 2>> /home/claude-agent/work/monad-liquidator/data/shadow_race_cron.log
+# СНЯТО 10.09.2026 по решению kelbic (исследовательские кроны monad-liquidator; выходы в data/ сохранены; вернуть — снять комментарий): 43 */1 * * * flock -n /tmp/trigger_watch.lock timeout 600 env PYTHONPATH=/home/claude-agent/work/monad-liquidator python3 -m analysis.trigger_watch > /dev/null 2>> /home/claude-agent/work/monad-liquidator/data/trigger_watch_cron.log
+# СНЯТО 10.09.2026 по решению kelbic (исследовательские кроны monad-liquidator; выходы в data/ сохранены; вернуть — снять комментарий): 23 8 * * 1 flock -n /tmp/shadow_weekly.lock timeout 600 env PYTHONPATH=/home/claude-agent/work/monad-liquidator python3 -m analysis.shadow_weekly > /dev/null 2>> /home/claude-agent/work/monad-liquidator/data/shadow_weekly_cron.log
+# СНЯТО 10.09.2026 по решению kelbic (исследовательские кроны monad-liquidator; выходы в data/ сохранены; вернуть — снять комментарий): 31 9 * * 1 flock -n /tmp/base_replay.lock timeout 900 env PYTHONPATH=/home/claude-agent/work/monad-liquidator python3 -m analysis.base_replay >> /home/claude-agent/work/monad-liquidator/data/base_replay.log 2>> /home/claude-agent/work/monad-liquidator/data/base_replay_cron.log
+# СНЯТО 10.09.2026 по решению kelbic (исследовательские кроны monad-liquidator; выходы в data/ сохранены; вернуть — снять комментарий): */10 * * * * flock -n /tmp/base_shadow.lock env PYTHONPATH=/home/claude-agent/work/monad-liquidator python3 -m analysis.base_shadow > /dev/null 2>> /home/claude-agent/work/monad-liquidator/data/base_shadow_cron.log
+# СНЯТО 10.09.2026 по решению kelbic (исследовательские кроны monad-liquidator; выходы в data/ сохранены; вернуть — снять комментарий): 47 9 * * 1 flock -n /tmp/usde_forecast.lock timeout 300 env PYTHONPATH=/home/claude-agent/work/monad-liquidator python3 -m analysis.usde_forecast > /dev/null 2>> /home/claude-agent/work/monad-liquidator/data/usde_forecast_cron.log
+# СНЯТО 10.09.2026 по решению kelbic (исследовательские кроны monad-liquidator; выходы в data/ сохранены; вернуть — снять комментарий): 29 8 * * * flock -n /tmp/usde_alert.lock timeout 300 env PYTHONPATH=/home/claude-agent/work/monad-liquidator python3 -m analysis.usde_forecast alert > /dev/null 2>> /home/claude-agent/work/monad-liquidator/data/usde_forecast_cron.log
+17 6 * * 1,4 flock -n /tmp/midnight_monitor.lock timeout 1800 /home/claude-agent/midnight-liquidator/monitor/run.sh
+# --- Midnight executor watchdog (авто-рестарт при краше/ребуте; flock=single-instance) ---
+@reboot flock -n /tmp/midnight-executor.lock /home/claude-agent/.midnight-bot/run.sh >> /home/claude-agent/.midnight-bot/executor.log 2>&1
+* * * * * flock -n /tmp/midnight-executor.lock /home/claude-agent/.midnight-bot/run.sh >> /home/claude-agent/.midnight-bot/executor.log 2>&1
+# --- ePBS/Glamsterdam T5-сенсор (Направление 6): раз в 3 дня, TG-алерт только на материю/триггер ---
+0 7 */3 * * flock -n /tmp/epbs_monitor.lock python3 /home/claude-agent/edge-research/analysis/epbs_monitor.py > /dev/null 2>> /home/claude-agent/edge-research/data/epbs_monitor_cron.log
+# --- WC liquidator watchdog (flock single-instance, авто-рестарт краш/ребут) ---
+# ВЫВЕДЕНО 01.09.2026 по решению kelbic: katana, wc, morpho-hl сняты с эксплуатации (денег на столе нет — см. /root/POSTMORTEM-liquidator-capital.md, прил. 2; /root/RETIRED-katana-wc-morphohl.md). ВОЗВРАТ: раскомментировать строки ниже.
+# @reboot flock -n /tmp/wc-executor.lock /home/claude-agent/.wc-bot/run.sh >> /home/claude-agent/.wc-bot/executor.log 2>&1
+# * * * * * flock -n /tmp/wc-executor.lock /home/claude-agent/.wc-bot/run.sh >> /home/claude-agent/.wc-bot/executor.log 2>&1
+# --- Katana liquidator watchdog (flock single-instance, авто-рестарт краш/ребут) ---
+# @reboot flock -n /tmp/katana-executor.lock /home/claude-agent/.katana-bot/run.sh >> /home/claude-agent/.katana-bot/executor.log 2>&1
+# * * * * * flock -n /tmp/katana-executor.lock /home/claude-agent/.katana-bot/run.sh >> /home/claude-agent/.katana-bot/executor.log 2>&1
+# ВЫВЕДЕНО 31.08 (hyperlend снят с эксплуатации: гонка невыигрываема, см. RETIRED-hyperlend-bot.md; вернуть — снять комментарий): @reboot flock -n /tmp/hyperlend-executor.lock /home/claude-agent/.hyperlend-bot/run.sh >> /home/claude-agent/.hyperlend-bot/executor.log 2>&1
+# ВЫВЕДЕНО 31.08 (hyperlend снят с эксплуатации: гонка невыигрываема, см. RETIRED-hyperlend-bot.md; вернуть — снять комментарий): * * * * * flock -n /tmp/hyperlend-executor.lock /home/claude-agent/.hyperlend-bot/run.sh >> /home/claude-agent/.hyperlend-bot/executor.log 2>&1
+# */10 * * * * /home/claude-agent/.katana-bot/deadman.sh > /dev/null 2>&1
+# */10 * * * * /home/claude-agent/.wc-bot/deadman.sh > /dev/null 2>&1
+23 6 * * 3 cd /home/claude-agent/twidgest-marketing && flock -n /tmp/twm_discovery.lock timeout 3600 sh -c "cat scripts/discovery_prompt.md | /home/claude-agent/.local/bin/claude -p" >> /home/claude-agent/twidgest-marketing/logs/discovery.log 2>&1
+# ВЫВЕДЕНО 31.08 (hyperlend снят с эксплуатации: гонка невыигрываема, см. RETIRED-hyperlend-bot.md; вернуть — снять комментарий): */10 * * * * /home/claude-agent/.hyperlend-bot/deadman.sh > /dev/null 2>&1
+# --- Ротация логов флота ликвидаторов (см. ~/.config/logrotate/liq-bots.conf) ---
+47 4 * * * /usr/sbin/logrotate -s /home/claude-agent/.config/logrotate/state /home/claude-agent/.config/logrotate/liq-bots.conf > /dev/null 2>&1
+# */15 * * * * flock -n /tmp/katana-shadow-watch.lock python3 /home/claude-agent/.katana-probe/shadow_watch.py >> /home/claude-agent/.katana-probe/shadow_watch.log 2>&1
+*/10 * * * * /home/claude-agent/.midnight-bot/deadman.sh > /dev/null 2>&1
+# СНЯТО 10.09.2026 ревью флота (chainwatch — единственный датчик, будивший человека без потребителя (Monad/Robinhood рынки, ликвидации закрыты)); вернуть — снять комментарий: 37 7 * * 2 flock -n /tmp/chainwatch.lock timeout 600 python3 /home/claude-agent/.chainwatch/chainwatch.py >> /home/claude-agent/.chainwatch/cron.log 2>&1
+# --- Хостовой сетевой детектор флота (24.07: все 4 бота легли синхронно = одна причина) ---
+*/2 * * * * flock -n /tmp/fleet-netwatch.lock /home/claude-agent/.fleet-watch/netwatch.sh > /dev/null 2>&1
+41 3 * * * mkdir -p /home/claude-agent/backups && /usr/bin/sqlite3 /home/claude-agent/twidgest-marketing/marketing.db ".backup /home/claude-agent/backups/marketing-$(date +\%u).db"
+*/15 * * * * flock -n /tmp/mn-target-watch.lock /home/claude-agent/.fleet-watch/target-watch.py >> /home/claude-agent/.fleet-watch/target-watch.log 2>&1
+# уплотнение к окну 31.07: каждые 3 мин 29-31 июля (flock не даёт наложиться на */15)
+# СНЯТО 10.09.2026 ревью флота (retry.sh — 182 попытки/45 сут my.telegram.org, ответ ERROR; нужна рука владельца); вернуть — снять комментарий: 17 */6 * * * /home/claude-agent/.local/mytg/retry.sh
+7,22,37,52 * * * * /home/claude-agent/.twidgest-watch/heartbeat.sh > /dev/null 2>&1
+*/15 * * * * flock -n /tmp/fleet-cronwatch.lock /home/claude-agent/.fleet-watch/cronwatch.sh > /dev/null 2>&1
+# СНЯТО 10.09.2026 ревью флота (mglo-watch слеп 38 сут (909×429), субъект — детонатор mGLO Base, направление закрыто); вернуть — снять комментарий: 24 * * * * flock -n /tmp/mglo-watch.lock timeout 300 python3 /home/claude-agent/.chainwatch/mglo_watch.py >> /home/claude-agent/.chainwatch/mglo_cron.log 2>&1
+# СНЯТО 10.09.2026 ревью флота (sow-watch — TVL Morpho/HyperEVM, направление закрыто 06.08); вернуть — снять комментарий: 41 */6 * * * flock -n /tmp/sow-watch.lock timeout 300 python3 /home/claude-agent/.chainwatch/sow_watch.py >> /home/claude-agent/.chainwatch/sow_cron.log 2>&1
+# СНЯТО 10.09.2026 ревью флота (disloc-watch 720 прогонов/сут нулей на одном ядре, ветка сейз-сессии мертва с 31.08); вернуть — снять комментарий: */2 * * * * flock -n /tmp/disloc-watch.lock timeout 280 python3 /home/claude-agent/.chainwatch/disloc_watch.py >> /home/claude-agent/.chainwatch/disloc_cron.log 2>&1
+# ОТКЛЮЧЕНО 31.08 (бот выведен, алерты сняты по просьбе владельца; вернуть — снять комментарий): 47 6 * * * scp -q -o ConnectTimeout=20 root@185.173.146.134:/root/liquidator/state/seizure_export.jsonl /home/claude-agent/.chainwatch/seizure_export_charlotte.jsonl 2>/dev/null
+13 7 * * * /home/claude-agent/.fleet-watch/hostbeat.sh > /dev/null 2>&1
+# --- Будильник агента: разбирает инбокс тревог (не-HIL) поднятой сессией ---
+*/20 * * * * flock -n /tmp/fleet-agent-wake.lock /usr/bin/python3 /home/claude-agent/.fleet-watch/agent-wake.py >> /home/claude-agent/.fleet-watch/agent-wake.log 2>&1
+# ВЫВЕДЕНО 31.08 (hyperlend снят с эксплуатации: гонка невыигрываема, см. RETIRED-hyperlend-bot.md; вернуть — снять комментарий): 17 * * * * flock -n /tmp/hl-depeg.lock /home/claude-agent/.hyperlend-bot/depeg.sh >> /home/claude-agent/.hyperlend-bot/depeg.log 2>&1
+# */5 * * * * flock -n /tmp/mhl_shadow.lock /home/claude-agent/morpho-hl-liquidator/run_shadow.sh
+# */10 * * * * /home/claude-agent/.fleet-watch/deadmen/morpho-hl.sh > /dev/null 2>&1
+# --- SOW-WATCH Morpho/HyperEVM: посев + новые рынки без гейта + белый список адаптеров (06.08) ---
+# 53 */6 * * * flock -n /tmp/morpho_sow_watch.lock timeout 900 sh -c "cd /home/claude-agent/morpho-hl-liquidator && python3 -m analysis.sow_watch" >> /home/claude-agent/morpho-hl-liquidator/data/sow_watch_cron.log 2>&1
+# --- Канарейка ВЫХОДОВ ликвидатора Base (задача #72): все 11 прямых маршрутов квотами,
+# read-only на публичном узле, раз в 6ч; порог = LIF рынка; тревога -> инбокс агента ---
+# ОТКЛЮЧЕНО 31.08 (бот выведен, алерты сняты по просьбе владельца; вернуть — снять комментарий): 5 5,11,17,23 * * * flock -n /tmp/route-canary.lock timeout 600 /home/claude-agent/.fleet-watch/route-canary.sh >> /home/claude-agent/.fleet-watch/route-canary.log 2>&1
+# window-rescan-2509: кит $1.005M (0xc6877a65), окно 25.09 15:00Z — крупнейшая цель за
+# историю репо. T−14д заводит ПРЕФЛАЙТ, дальше две сверки книги. Удалить после окна.
+0 7 11 9 * /home/claude-agent/midnight-liquidator/ops/window_rescan_2509.sh 2026-09-11 "префлайт" >> /home/claude-agent/.fleet-watch/watch.log 2>&1
+0 15 23 9 * /home/claude-agent/midnight-liquidator/ops/window_rescan_2509.sh 2026-09-23 "T−48ч" >> /home/claude-agent/.fleet-watch/watch.log 2>&1
+0 13 25 9 * /home/claude-agent/midnight-liquidator/ops/window_rescan_2509.sh 2026-09-25 "T−2ч" >> /home/claude-agent/.fleet-watch/watch.log 2>&1
+# СНЯТО 10.09.2026 ревью флота (cu-quota — Charlotte выведена 31.08, retired:true, работает впустую); вернуть — снять комментарий: 7 * * * * flock -n /tmp/cu_quota_watch.lock timeout 300 /home/claude-agent/.fleet-watch/cu-quota.sh
+# СНЯТО 10.09.2026 ревью флота (threads-watch — субъект выведен 31.08, ранний выход по маркеру); вернуть — снять комментарий: */5 * * * * flock -n /tmp/threads_watch.lock timeout 60 /home/claude-agent/.fleet-watch/threads-watch.sh >/dev/null 2>&1
+# СНЯТО 10.09.2026 ревью флота (blind_audit — модельная нога мертва с 01.09 (OAuth), субъект выведен); вернуть — снять комментарий: 41 5 * * * flock -n /tmp/blind_audit.lock timeout 1700 /home/claude-agent/.fleet-watch/blind_audit.sh >> /home/claude-agent/.fleet-watch/blind-audit.log 2>&1
+# ОТКЛЮЧЕНО 31.08 (капитал выведен, бот остановлен; вернуть — снять комментарий): */4 * * * * flock -n /tmp/prize_watch.lock timeout 600 python3 /home/claude-agent/.fleet-watch/prize_watch.py >> /home/claude-agent/.fleet-watch/prize-watch.log 2>&1
+# СНЯТО 10.09.2026 ревью флота (daily_kpi — Charlotte выведена, 9 дней «человеку не шлём»); вернуть — снять комментарий: 3 8 * * * /usr/bin/python3 /home/claude-agent/.fleet-watch/daily_kpi.py --send >> /home/claude-agent/.fleet-watch/daily-kpi.log 2>&1
+# --- самопроверка авторизации крон-тракта claude -p (10.09): провал → человеку; см. claude-auth-check.sh ---
+58 5 * * * flock -n /tmp/claude-auth-check.lock /home/claude-agent/.fleet-watch/claude-auth-check.sh > /dev/null 2>&1
+# --- forecast-dashboard: автоподъём API/дашборда/планировщика (скрипт идемпотентен; flock = single-instance) ---
+@reboot sleep 60 && /home/claude-agent/forecast-dashboard/scripts/run_local.sh >> /home/claude-agent/forecast-dashboard/data/run/autostart.log 2>&1
+*/2 * * * * /home/claude-agent/forecast-dashboard/scripts/run_local.sh >> /home/claude-agent/forecast-dashboard/data/run/autostart.log 2>&1
+*/2 * * * * /home/claude-agent/forecast-dashboard/scripts/tunnel.sh >> /home/claude-agent/forecast-dashboard/data/run/tunnel_cron.log 2>&1
+# --- ТЕНЬ B+6: второй слой сторожа (Charlotte может умереть целиком) -> инбокс агента ---
+*/10 * * * * flock -n /tmp/shadow-b6-vwatch.lock nice -n 19 python3 /home/claude-agent/work/liquidator/shadow_b6/vienna_watch.py >> /home/claude-agent/.fleet-watch/shadow-b6.log 2>&1
+# --- ТЕНЬ B+6: суточная строка в docs/research/SHADOW-B6-LOG.md (в TG не слать) ---
+30 6 * * * flock -n /tmp/shadow-b6-daily.lock /home/claude-agent/work/liquidator/shadow_b6/vienna_daily.sh >> /home/claude-agent/.fleet-watch/shadow-b6.log 2>&1
+# --- 18.09.2026 находка TERM-GATE-2026-09-18: два суточных сторожа, hil=False (инбокс агента) ---
+# (а) книга Term Finance, окно 11.12.2026 15:00Z: два заёмщика + тождество агрегата; префлайт выхода с T−14д
+27 7 * * * flock -n /tmp/term-watch.lock timeout 900 nice -n 19 /usr/bin/python3 /home/claude-agent/.fleet-watch/term-watch.py >> /home/claude-agent/.fleet-watch/term-watch.log 2>&1
+# (б) книга Midnight вне Base (Ethereum/Arc/Robinhood) + поле midnight в реестре morpho-org/sdks
+43 7 * * * flock -n /tmp/midnight-chains.lock timeout 1800 nice -n 19 /usr/bin/python3 /home/claude-agent/.fleet-watch/midnight-chains-watch.py >> /home/claude-agent/.fleet-watch/midnight-chains.log 2>&1
+# term-route-watch: суточный замер выхода залога Term (Fluid/Kyber), доля бонуса после выхода; откат — см. term-liquidator/docs/ROLLBACKS.md
+41 7 * * * flock -n /tmp/term-route-watch.lock nice -n 19 /usr/bin/python3 /home/claude-agent/term-liquidator/ops/route_watch.py >> /home/claude-agent/.fleet-watch/term-route-watch.cron.log 2>&1
+# --- 19.09.2026: МЕСЯЧНЫЙ замер книги Morpho Blue на World Chain (chainId 480). Бот wc
+# выведен 01.09 (RETIRED-katana-wc-morphohl.md): направление закрыто знанием о СОСТОЯНИИ
+# книги, а состояние меняется. Сторож молчит при здоровье, тревога -> инбокс агента.
+# Условие возврата бота — пороги внутри wc-book-watch.py.
+53 7 1 * * flock -n /tmp/wc-book-watch.lock timeout 1800 nice -n 19 /usr/bin/python3 /home/claude-agent/.fleet-watch/wc-book-watch.py >> /home/claude-agent/.fleet-watch/wc-book-watch.cron.log 2>&1
+*/2 * * * * /home/claude-agent/forecast-dashboard/scripts/tunnel_api.sh >> /home/claude-agent/forecast-dashboard/data/run/tunnel_api_cron.log 2>&1
