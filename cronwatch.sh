@@ -107,6 +107,14 @@ REGISTRY=(
   "midnight-chains|fleet-watch/midnight-chains-watch.py|86400"
   # 18.09.2026: суточный сторож выхода залога Term (Fluid/Kyber), доля бонуса после выхода.
   "term-route-watch|term-liquidator/ops/route_watch.py|86400"
+  # 19.09.2026: МЕСЯЧНЫЙ замер книги Morpho/World Chain (субъект wc выведен 01.09, но
+  # закрыт ЗНАНИЕМ О СОСТОЯНИИ книги — а состояние меняется). 4-е поле — СВИДЕТЕЛЬ:
+  # журнала на этой машине хватает на ~3 суток, а порог месячной задачи 5.5 млн с,
+  # поэтому доказать её запуск journalctl НЕ МОЖЕТ НИКОГДА (замерено 19.09: самая
+  # старая строка журнала — трёхдневной давности). Без свидетеля запись висела бы в
+  # «НЕДОКАЗУЕМО» вечно, то есть надзора не было бы вовсе, а строка в реестре создавала
+  # бы видимость надзора — ровно «мёртвый сторож хуже отсутствующего».
+  "wc-book|fleet-watch/wc-book-watch.py|2764800|wc-book-watch.state"
   # "exec-wc|wc-executor.lock|60"
   # "exec-katana|katana-executor.lock|60"
   # ВЫВЕДЕНО 31.08: hyperlend снят с эксплуатации (гонка невыигрываема — см.
@@ -123,9 +131,14 @@ REGISTRY=(
 # sow-watch (86400с ⇒ порог 48ч), а окно осталось 12-часовым — «НЕ ЗАПУСКАЛСЯ» прилетало бы
 # каждый день по построению, независимо от здоровья задачи. Ложная тревога сторожа стоит
 # дороже молчания: на неё перестают смотреть.
+# Задачи СО СВИДЕТЕЛЕМ (4-е поле) в расчёт окна НЕ входят: их запуск доказывается mtime
+# файла, а не журналом, и растягивать на них выборку journalctl — только платить временем
+# на каждом прогоне (месячная каденция дала бы окно 64 суток при журнале в 3 суток).
 _max_cad=0
 for _e in "${REGISTRY[@]}"; do
-  _c=${_e##*|}
+  _r=${_e#*|}; _r=${_r#*|}                 # хвост после «имя|подстрока»
+  case "$_r" in (*'|'*) continue ;; esac   # есть свидетель — окно ему не нужно
+  _c=$_r
   case "$_c" in (''|*[!0-9]*) _c=0 ;; esac
   [ "$_c" -gt "$_max_cad" ] && _max_cad=$_c
 done
@@ -239,6 +252,17 @@ if [ "${1:-}" = "selftest" ]; then
     printf 'agent-wake|%s\n' "$(( now - 86400 ))" > "$sand/seen_old"
     rm -f "$SSTAMP"
     t "старая задача без запусков — ТРЕВОГА"     2 gprobe "$sand/seen_old"
+    # (в,г) СВИДЕТЕЛЬ (19.09). У месячной задачи журнал КОРОЧЕ порога всегда, значит обе
+    # ветки её вердикта решает mtime файла-свидетеля — и обе обязаны быть проверены, иначе
+    # «зарегистрирован в cronwatch» означало бы надзор, которого нет. Свидетель лежит в
+    # $DIR, а в стенде $DIR — песочница, поэтому боевой файл сторожа не трогается.
+    printf 'wc-book|%s\n' "$(( now - 99999999 ))" > "$sand/seen_wit"
+    : > "$sand/wc-book-watch.state"
+    rm -f "$SSTAMP"
+    t "месячная задача: свежий свидетель — НЕ тревога"  0 gprobe "$sand/seen_wit"
+    rm -f "$sand/wc-book-watch.state"
+    rm -f "$SSTAMP"
+    t "месячная задача: свидетеля нет — ТРЕВОГА"        2 gprobe "$sand/seen_wit"
   fi
 
   # 4) боевые артефакты обязаны остаться нетронутыми
@@ -308,7 +332,9 @@ touch "$SEEN" 2>/dev/null || true
 
 bad=""; report=""; unproven=""
 for e in "${REGISTRY[@]}"; do
-  name=${e%%|*}; rest=${e#*|}; pat=${rest%%|*}; cad=${rest##*|}
+  name=${e%%|*}; rest=${e#*|}; pat=${rest%%|*}; cad=${rest#*|}; wit=""
+  case "$cad" in (*'|'*) wit=${cad#*|}; cad=${cad%%|*} ;; esac
+  [ -n "$wit" ] && wit="$DIR/$wit"
   last=$(printf '%s\n' "$SNAP" | grep -F "$pat" 2>/dev/null | tail -1 | cut -d. -f1)
   case "$last" in (''|*[!0-9]*) last="" ;; esac
   limit=$(( cad * 2 + GRACE ))
@@ -324,7 +350,24 @@ for e in "${REGISTRY[@]}"; do
   known=$(( now - first ))
   if [ -z "$last" ]; then
     age=-1
-    if [ "$span" -lt "$limit" ]; then
+    if [ -n "$wit" ]; then
+      # СВИДЕТЕЛЬ: файл, который задача переписывает КАЖДЫМ успешным прогоном. mtime —
+      # внешнее по отношению к задаче доказательство запуска (сам скрипт о себе не
+      # отчитывается), ровно как journalctl для остальных. Нет файла = wage -1.
+      wage=-1
+      if [ -f "$wit" ]; then
+        wmt=$(stat -c %Y "$wit" 2>/dev/null)
+        case "$wmt" in (''|*[!0-9]*) wmt="" ;; esac
+        [ -n "$wmt" ] && wage=$(( now - wmt ))
+      fi
+      if [ "$wage" -ge 0 ] && [ "$wage" -le "$limit" ]; then
+        age=$wage
+      elif [ "$known" -lt "$limit" ]; then
+        unproven="$unproven $name(НОВАЯ, в реестре ${known}с<${limit}с)"
+      else
+        bad="$bad\n  🔴 $name — свидетель $wit ${wage}с > порога ${limit}с (каденция ${cad}с), запусков в журнале нет"
+      fi
+    elif [ "$span" -lt "$limit" ]; then
       unproven="$unproven $name(журнал ${span}с<${limit}с)"
     elif [ "$known" -lt "$limit" ]; then
       unproven="$unproven $name(НОВАЯ, в реестре ${known}с<${limit}с)"
