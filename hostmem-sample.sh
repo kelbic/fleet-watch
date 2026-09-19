@@ -16,7 +16,8 @@
 set -u
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG=${HM_LOG:-$DIR/hostmem.log}
-MAXBYTES=${HM_MAXBYTES:-5242880}   # ~5 МБ ≈ 25 суток строк; хвост важнее истории
+MAXBYTES=${HM_MAXBYTES:-5242880}   # 5 МБ; при ЗАМЕРЕННОЙ длине строки 190б это ~19 суток,
+                                   # после усечения остаётся половина. Хвост важнее истории.
 TOPN=${HM_TOPN:-3}
 
 read -r _ memtotal memfree memavail swaptotal swapfree < <(
@@ -38,11 +39,15 @@ printf '%s free=%dM avail=%dM swapfree=%d/%dM load=%s/%s/%s procs=%s pswpin=%s p
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$memfree" "$memavail" "$swapfree" "$swaptotal" \
   "$l1" "$l5" "$l15" "$procs" "$pswpin" "$pswpout" "${top% }" >> "$LOG"
 
-# Ротация усечением С ГОЛОВЫ: файл не переименовывается, поэтому открытые дескрипторы
-# и хвостовые grep'и переживают её без потери позиции у конца.
+# Ротация усечением С ГОЛОВЫ, ЧЕРЕЗ ТОТ ЖЕ INODE (cat >, не mv): mv подменил бы inode и
+# читатели с открытым дескриптором продолжили бы читать отвязанный файл. Режем по СТРОКАМ
+# (tail -n), а не по байтам: -c оставил бы первую строку обрезанной с головы.
 if [ -f "$LOG" ]; then
   sz=$(stat -c %s "$LOG" 2>/dev/null || echo 0)
   if [ "$sz" -gt "$MAXBYTES" ]; then
-    tail -c $((MAXBYTES / 2)) "$LOG" > "$LOG.trim" && mv "$LOG.trim" "$LOG"
+    keep=$(( MAXBYTES / 2 / 200 ))   # ~200 байт на строку
+    if tail -n "$keep" "$LOG" > "$LOG.trim" 2>/dev/null; then
+      cat "$LOG.trim" > "$LOG" && rm -f "$LOG.trim"
+    fi
   fi
 fi
