@@ -50,6 +50,17 @@ CTRL = {"rpcs": ["https://mainnet.base.org", "https://base-rpc.publicnode.com"],
         # MC_CTRL_MIN — ручка СТЕНДА: поднять порог и доказать, что провал контроля
         # даёт «прибор мёртв», а не молчаливый ноль по цепям.
 WAKE_UNITS = 5_000                              # порог пробуждения, $ (задание владельца)
+# ЛЕСТНИЦА СТУПЕНЕЙ (21.09, крон-триаж тревоги ethereum-alive). Нижняя ступень — порог
+# владельца, НЕ трогать. Верхние добавлены, потому что прежняя защёлка
+# `usd >= WAKE_UNITS and was < WAKE_UNITS` стреляла ТОЛЬКО на первом пересечении: после
+# записи в state books.ethereum.usd=5225 рост книги хоть до $5M давал was=5225 => условие
+# ложно => МОЛЧАНИЕ НАВСЕГДА. Растяжка на $5k выжигала специфичность сторожа ровно по тому
+# событию, ради которого он ставился ([[retired-subject-needs-watchdog-sweep]],
+# [[test-that-can-only-return-zero]]). Ключ тревоги несёт НОМИНАЛ ступени — иначе dedup 7
+# суток съел бы следующую ступень как повтор.
+# $500k — «самая мелкая цель, которую имело бы смысл брать» из докстроки этого файла
+# (растяжка стоит на два порядка ниже неё); $50k — промежуточный рост на порядок.
+WAKE_TIERS = (WAKE_UNITS, 50_000, 500_000)
 KNOWN_MIDNIGHT = {"ethmainnet", "basemainnet", "arcmainnet", "robinhoodmainnet"}
 # ^ ИМЕНА РЕЕСТРА, не наши синонимы: первый прогон 18.09 поднял ложную «новая цепь»,
 #   потому что сравнивал ChainId.ethMainnet с нашим "ethereum" ([[red-bench-is-not-a-diagnosis]]).
@@ -188,6 +199,33 @@ def total_units(cfg, ids, sel):
     return tot, per
 
 
+def tier_of(usd: float) -> int:
+    """Индекс достигнутой ступени лестницы; -1 = книга ниже растяжки."""
+    t = -1
+    for i, lvl in enumerate(WAKE_TIERS):
+        if usd >= lvl:
+            t = i
+    return t
+
+
+def tier_verdict(t: int) -> str:
+    """ВЕРДИКТ, А НЕ РЕШЕНИЕ. Прежний текст растяжки нёс «Перенос бота — 1–2 дня» на ЛЮБОЙ
+    сумме: 21.09 он приехал на книге $5,225, где вся Ethereum-книга — одна позиция $5,038
+    USDC, и звал на 1–2 дня работы под приз с долга в $5k. Решение, протащенное в растяжку;
+    на нижних ступенях текст теперь говорит ПРЯМО, что переносить нечего."""
+    if t >= len(WAKE_TIERS) - 1:
+        return ("Сопоставимо с минимальной целью, которую имело бы смысл брать — ОЦЕНИТЬ "
+                "перенос (1–2 дня, то же ядро и тот же topic0), начав с размера крупнейшей "
+                "ОДНОЙ позиции, а не суммы книги.")
+    if t <= 0:
+        return (f"Это РАСТЯЖКА: на два порядка ниже минимальной осмысленной цели "
+                f"(~${WAKE_TIERS[-1]:,}). НЕ основание для переноса бота — только отметка, "
+                f"что цепь перестала быть пустой.")
+    return (f"Рост на порядок, но всё ещё ниже минимальной осмысленной цели "
+            f"(~${WAKE_TIERS[-1]:,}). Перенос НЕ обоснован; следующая ступень — "
+            f"${WAKE_TIERS[-1]:,}.")
+
+
 def registry_chains():
     """Поле `midnight` в каноническом реестре morpho-org/sdks."""
     txt = urllib.request.urlopen(urllib.request.Request(
@@ -272,19 +310,32 @@ def main():
     except Exception as e:
         alarm(f"реестр morpho-org/sdks не прочитан: {str(e)[:120]}", "midnight-chains:registry-dead")
 
-    # ── защёлка по книге ──
+    # ── защёлка по книге: ЛЕСТНИЦА, а не одно пересечение ──
+    tiers_prev = dict(prev.get("tiers") or {})
+    if not tiers_prev:                      # первый прогон после апгрейда: ступень берём из
+        for nm, ob in (prev.get("books") or {}).items():   # уже записанной книги, чтобы не
+            if isinstance(ob, dict) and "usd" in ob:       # выстрелить повтором по ступени,
+                tiers_prev[nm] = tier_of(ob["usd"])        # которая уже отзвонила.
+    tiers_now = dict(tiers_prev)
     for name, b in books.items():
         if "usd" not in b:
+            # Чтение цепи упало — ступень НЕ сбрасываем. Иначе неудачный прогон обнулял бы
+            # `was` до 0 и следующий успешный выдал бы ложное «КНИГА ОЖИЛА» на той же
+            # книге ([[metric-fell-is-not-recovered]]).
             continue
         usd = b["usd"]
-        was = (prev.get("books") or {}).get(name, {}).get("usd", 0.0)
-        if usd >= WAKE_UNITS and was < WAKE_UNITS:
+        t_now, t_was = tier_of(usd), int(tiers_prev.get(name, -1))
+        tiers_now[name] = t_now
+        if t_now > t_was:
+            lvl = WAKE_TIERS[t_now]
             alarm(f"КНИГА ОЖИЛА: Midnight/{name} = ${usd:,.2f} на {b['markets']} рынках "
-                  f"(было ${was:,.2f}, порог ${WAKE_UNITS:,}). Перенос бота — 1–2 дня, "
-                  f"то же ядро и тот же topic0.", f"midnight-chains:{name}-alive")
+                  f"(ступень ${lvl:,}, прежняя ступень "
+                  f"{('$%s' % format(WAKE_TIERS[t_was], ',')) if t_was >= 0 else 'ниже растяжки'}). "
+                  f"{tier_verdict(t_now)}", f"midnight-chains:{name}-alive-{lvl}")
 
     json.dump({"ts": int(time.time()), "ctrl_units": ctrl, "books": books,
-               "chains": state_chains, "reg_new": prev.get("reg_new")}, open(STATE, "w"))
+               "chains": state_chains, "reg_new": prev.get("reg_new"),
+               "tiers": tiers_now}, open(STATE, "w"))
     return 0
 
 
