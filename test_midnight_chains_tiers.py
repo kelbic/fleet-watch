@@ -5,7 +5,7 @@
 пересечении: после записи books.ethereum.usd=5225 рост книги до $5M давал was=5225 и
 МОЛЧАНИЕ. Стенд держит четыре свойства:
   1) первый прогон после апгрейда на той же книге ($5,225) НЕ звонит повтором;
-  2) рост $5,225 -> $60,000 даёт РОВНО одну тревогу с номиналом ступени в КЛЮЧЕ
+  2) рост $5,225 -> $150,000 даёт РОВНО одну тревогу с номиналом ступени в КЛЮЧЕ
      (иначе dedup 7 суток съел бы её как повтор прежнего ключа);
   3) верхняя ступень зовёт оценить перенос, нижние — ПРЯМО запрещают его как основание
      (прежний текст нёс «Перенос бота — 1–2 дня» на любой сумме);
@@ -17,6 +17,9 @@
 STATE уводится в temp ДО main(): боевой midnight-chains.state — защёлка живого сторожа.
 """
 import importlib.util, json, os, sys, tempfile
+
+os.environ["FLEET_ALERT_MUTE"] = "1"   # мьют НА ТРАНСПОРТЕ, не только подменой alarm():
+# подмена — шов выше дефекта, а сторож канала живёт в notify.py ([[tests-never-touch-production-channels]]).
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.environ.get("MC_SCRIPT") or os.path.join(HERE, "midnight-chains-watch.py")
@@ -95,23 +98,23 @@ check(not fired, f"апгрейд на прежней книге молчит (�
 check(st["tiers"]["ethereum"] == 0, f"ступень 0 записана: {st.get('tiers')}")
 
 # 2. Рост до $60,000 — ровно одна тревога, номинал ступени в КЛЮЧЕ.
-fired, st = run(60_000.0)
+fired, st = run(150_000.0)
 check(len(fired) == 1, f"ровно одна тревога, получено {len(fired)}")
-check(fired and fired[0][0] == "midnight-chains:ethereum-alive-50000",
+check(fired and fired[0][0] == "midnight-chains:ethereum-alive-100000",
       f"ключ несёт номинал ступени: {fired and fired[0][0]}")
 check(fired and "НЕ обоснован" in fired[0][1], "средняя ступень запрещает перенос")
 check(fired and "1–2 дня" not in fired[0][1], "средняя ступень не зовёт переносить бота")
 check(st["tiers"]["ethereum"] == 1, "ступень 1 записана")
 
 # 3. Тот же уровень ещё раз — молчание (лестница не звенит на месте).
-fired, _ = run(59_000.0)
+fired, _ = run(140_000.0)
 check(not fired, f"на той же ступени молчит (было {fired})")
 
 # 4. НЕГАТИВНЫЙ КОНТРОЛЬ ступени: провал чтения цепи не сбрасывает её.
-fired, st = run(60_000.0, dead=("ethereum",))
+fired, st = run(150_000.0, dead=("ethereum",))
 check(not fired, "упавшее чтение не звонит книгой")
 check(st["tiers"].get("ethereum") == 1, f"ступень пережила провал: {st.get('tiers')}")
-fired, _ = run(60_000.0)
+fired, _ = run(150_000.0)
 check(not fired, "после провала нет ложного «КНИГА ОЖИЛА» на той же книге")
 
 # 5. Верхняя ступень — зовёт оценить перенос.
@@ -126,8 +129,8 @@ check(len(fired) == 1 and fired[0][0] == "midnight-chains:ethereum-alive-500000"
       f"с нуля — одна тревога верхней ступени, получено {[f[0] for f in fired]}")
 
 # 7. КОНТРОЛЬ СТЕНДА: со старой защёлкой свойство 2 обязано ПРОВАЛИТЬСЯ.
-legacy_fire = 60_000.0 >= mc.WAKE_UNITS and 5225.095459690663 < mc.WAKE_UNITS
-check(not legacy_fire, "старая защёлка на росте $5,225 -> $60,000 МОЛЧАЛА (дефект воспроизведён)")
+legacy_fire = 150_000.0 >= mc.WAKE_UNITS and 5225.095459690663 < mc.WAKE_UNITS
+check(not legacy_fire, "старая защёлка на росте $5,225 -> $150,000 МОЛЧАЛА (дефект воспроизведён)")
 
 print("ИТОГ:", "ЗЕЛЁНЫЙ" if ok else "КРАСНЫЙ")
 sys.exit(0 if ok else 1)
