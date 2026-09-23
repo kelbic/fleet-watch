@@ -152,6 +152,39 @@ def market_ids(cfg, frm, to, t0):
     return out
 
 
+# ЦЕНА ТОКЕНА ЗАЙМА (23.09, крон-триаж ethereum-alive-100000). До этой правки книга была
+# СУММОЙ ЕДИНИЦ: 8.5 WETH входили в неё как $8.50 при ETH ≈ $2 744 — книга занижена на
+# ~$23k (~18%). На ступени $500k такое занижение проспало бы именно тот переход, ради
+# которого сторож стоит. Стейблы — 1:1; WETH — Chainlink ETH/USD мейннета; всё прочее
+# считается 1:1 как раньше, но ИМЕНУЕТСЯ в логе как «без цены» — незнание видно, а не тихо.
+STABLES = {"0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",   # USDC
+           "0xdac17f958d2ee523a2206206994597c13d831ec7",   # USDT
+           "0xdc035d45d973e3ec169d2276ddab16f1e407384f",   # USDS
+           "0x6b175474e89094c44da98b954eedeac495271d0f"}   # DAI
+ETH_LIKE = {"0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"}  # WETH мейннета
+ETH_USD_FEED = "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"  # Chainlink ETH/USD, мейннет
+_ETH_USD = {}
+
+
+def unit_price(cfg, token):
+    """-> (цена за единицу, оценён ли). Не оценён => 1.0 и флаг False (поведение до 23.09)."""
+    t = token.lower()
+    if t in STABLES:
+        return 1.0, True
+    if t in ETH_LIKE and cfg is CHAINS.get("ethereum"):
+        if "p" not in _ETH_USD:
+            try:
+                r = rpc(cfg["rpcs"], "eth_call", [{"to": ETH_USD_FEED, "data": "0xfeaf968c"},
+                                                  "latest"])[2:]
+                p = int(r[64:128], 16) / 1e8
+                _ETH_USD["p"] = p if 100 < p < 100_000 else None
+            except Exception:
+                _ETH_USD["p"] = None
+        if _ETH_USD["p"]:
+            return _ETH_USD["p"], True
+    return 1.0, False
+
+
 DEC_CACHE = {}
 
 
@@ -286,11 +319,22 @@ def main():
             ids = list(seen_m)
             tot_raw, per = total_units(cfg, ids, sel)
             # НОРМИРОВКА ПО ТОКЕНУ ЗАЙМА: без неё сумма бессмысленна (см. market_ids)
-            usd = sum(v / 10 ** decimals(cfg, seen_m[m]) for m, v in per.items())
-            books[name] = {"markets": len(ids), "usd": usd, "head": head, "nonzero": len(per)}
+            usd, top, unpriced = 0.0, (0.0, None), set()
+            for m, v in per.items():
+                px, ok = unit_price(cfg, seen_m[m])
+                x = v / 10 ** decimals(cfg, seen_m[m]) * px
+                usd += x
+                top = max(top, (x, m))
+                if not ok:
+                    unpriced.add(seen_m[m])
+            books[name] = {"markets": len(ids), "usd": usd, "head": head, "nonzero": len(per),
+                           "top_usd": top[0], "top_market": top[1],
+                           "unpriced": sorted(unpriced)}
             state_chains[name] = {"mk": seen_m, "scanned": head + 1, "fails": 0}
-            log(f"{name}: рынков {len(ids)}, книга ${usd:,.2f} (нормировано по decimals "
-                f"токена займа), ненулевых {len(per)}, блок {head}")
+            log(f"{name}: рынков {len(ids)}, книга ${usd:,.2f} (decimals + цена токена займа), "
+                f"ненулевых {len(per)}, крупнейший рынок ${top[0]:,.2f}"
+                + (f", БЕЗ ЦЕНЫ (1:1) токены {sorted(unpriced)}" if unpriced else "")
+                + f", блок {head}")
         except Exception as e:
             # 429/сетевой сбой одного прогона — НЕ тревога: суточная каденция превратила бы
             # её в ежедневный звон. Тревога после трёх подряд (== трёх суток слепоты).
