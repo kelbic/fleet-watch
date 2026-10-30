@@ -14,7 +14,8 @@
      решение о капитале, а не техническая починка.
   3. Сломана сама автоматика доставки: агента не удаётся разбудить, инбокс не
      разбирается N раз подряд. Иначе тишина инбокса неотличима от «всё спокойно»
-     (урок 01.08: мёртвый сторож хуже отсутствующего).
+     (урок 01.08: мёртвый сторож хуже отсутствующего). Реализовано 30.10: если лог
+     agent-wake старше READER_STALE_SEC (или его нет), тревога агенту едет человеку.
   4. Необратимое или внешнее действие, которое агент не вправе совершить сам.
 
 Не HIL, даже если выглядит страшно: конкурент задеплоил контракт, залог кита двинулся,
@@ -59,6 +60,15 @@ SELFTEST_SUFFIX = ":selftest"
 # теряет защёлку, а бой её получает. Дверь закрыта у самого пути
 # ([[tests-never-touch-production-channels]]: границу держит транспорт, а не дисциплина).
 DEDUP_STATE = os.environ.get("FLEET_DEDUP_STATE") or os.path.join(WATCH_DIR, "notify-dedup.json")
+# РАЗБОРЩИК ИНБОКСА ЖИВ? (30.10, HIL-случай 3). Заморозка 14.10 выключила agent-wake, а
+# Term-сторожей оставила: exit-collapsed и foreign-pool легли в инбокс, который не читал
+# никто (одна запись — с 23.10). Живость — ПОЛОЖИТЕЛЬНАЯ: agent-wake пишет строку в свой
+# лог каждый прогон (*/20), даже «не бужу». Путь выводится из INBOX, как архив: стенд с
+# временным инбоксом не смотрит на боевой лог. Названный предел: agent-wake, который
+# крутится, но каждый раз падает, лог освежает — этот класс закрывает он сам
+# (attempts -> escalated-to-human), здесь он «жив».
+READER_LOG = os.path.join(os.path.dirname(INBOX) or ".", "agent-wake.log")
+READER_STALE_SEC = float(os.environ.get("FLEET_READER_STALE_SEC", str(3 * 3600)))
 LOG_FILE = os.path.join(WATCH_DIR, "notify.log")
 TG_ENV = os.path.expanduser("~/.claude/channels/telegram/.env")
 CHAT_ID = os.environ.get("MN_CHAT_ID", "265715923")
@@ -124,6 +134,18 @@ def _tg(text: str) -> bool:
     except Exception as e:  # noqa: BLE001
         _log(f"notify: отправка HIL упала: {e}")
         return False
+
+
+def reader_dead() -> str:
+    """Причина, если разборщик инбокса мёртв; "" — жив."""
+    try:
+        age = time.time() - os.path.getmtime(READER_LOG)
+    except OSError:
+        return "лога разборщика инбокса (agent-wake) нет"
+    if age > READER_STALE_SEC:
+        since = time.strftime("%d.%m %H:%MZ", time.gmtime(time.time() - age))
+        return f"разборщик инбокса (agent-wake) молчит с {since}"
+    return ""
 
 
 def _dedup_hit(key: str, ttl: float) -> bool:
@@ -205,10 +227,18 @@ def notify(text: str, *, source: str, hil: bool = False, key: str = "",
     if not text.startswith(pre) and f"[{source}]" not in text.split("\n")[0]:
         text = f"{pre} {text}"
 
+    # HIL-случай 3: инбокс некому разбирать ⇒ тревога агенту молча пропала бы
+    escalated = "" if hil else reader_dead()
+    if escalated:
+        hil = True
+        text = f"{text}\n⚠ В TG, а не в инбокс агента: {escalated} — разбор не работает."
+
     rec = {"ts": int(time.time()),
            "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
            "source": source, "hil": hil, "key": key, "text": text,
            "attempts": 0, "handled": False}
+    if escalated:
+        rec["escalated"] = escalated
     path = INBOX + (".muted" if muted() else "")
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)

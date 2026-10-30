@@ -14,6 +14,9 @@ def nt(tmp_path, monkeypatch):
     import notify as _n
     n = importlib.reload(_n)
     monkeypatch.setattr(n, "muted", lambda: False)
+    # разборщик инбокса ЖИВ (свежий лог): иначе hil=False эскалируется человеку (30.10),
+    # а эти тесты — про дедуп обычного маршрута
+    open(n.READER_LOG, "w").close()
     return n
 
 
